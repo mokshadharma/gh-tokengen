@@ -502,9 +502,6 @@ def get_installation_token(
         Token data from GitHub API
     """
     # Generate JWT
-    if not debug:
-        eprint(f"Generating JWT (expires in {jwt_expiry} seconds)...")
-
     jwt_token, issued_at, expires_at = generate_jwt(client_id, pem_path, jwt_expiry, debug)
 
     # Prepare API request
@@ -526,9 +523,6 @@ def get_installation_token(
         sys.exit(0)
 
     # Exchange JWT for installation token
-    if not debug:
-        eprint("Exchanging JWT for installation token...")
-
     token_data, response_headers = make_api_request(
         endpoint,
         jwt_token,
@@ -734,9 +728,6 @@ def main() -> None:
 
     # If JWT-only mode, generate and output JWT then exit
     if args.jwt:
-        if not args.quiet and not args.debug:
-            eprint(f"Generating JWT (expires in {args.jwt_expiry} seconds)...")
-        
         jwt_token, issued_at, expires_at = generate_jwt(
             client_id=client_id,
             pem_path=pem_path,
@@ -749,12 +740,17 @@ def main() -> None:
             debug_print(f"JWT: {mask_token(jwt_token)}", args.debug)
             eprint()  # Blank line before output
         elif not args.quiet:
+            eprint(f"Generating JWT (expires in {args.jwt_expiry} seconds)...")
             eprint("Successfully generated JWT!\n")
         
         output_jwt(jwt_token, issued_at, expires_at, args.output_format, args.quiet)
         return
 
     # Get installation token
+    if not args.quiet and not args.debug:
+        eprint(f"Generating JWT (expires in {args.jwt_expiry} seconds)...")
+        eprint("Exchanging JWT for installation token...")
+    
     token_data = get_installation_token(
         client_id=client_id,
         pem_path=pem_path,
