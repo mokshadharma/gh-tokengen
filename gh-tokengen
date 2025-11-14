@@ -159,7 +159,7 @@ def generate_jwt(
     pem_path: Path,
     expiry_seconds: int,
     debug: bool
-) -> str:
+) -> Tuple[str, int, int]:
     """
     Generate a JWT for GitHub App authentication.
 
@@ -170,7 +170,7 @@ def generate_jwt(
         debug: Enable debug output
 
     Returns:
-        The generated JWT string
+        Tuple of (JWT string, issued_at timestamp, expires_at timestamp)
     """
     try:
         # Import cryptography library
@@ -204,7 +204,7 @@ def generate_jwt(
             debug_print(f"JWT expires at: {exp_time}", debug)
             debug_print(f"JWT preview: {token[:20]}...{token[-20:]}", debug)
 
-        return token
+        return token, payload['iat'], payload['exp']
 
     except ImportError:
         fatal_error(
@@ -342,6 +342,41 @@ def format_permissions(permissions: Dict[str, str]) -> str:
     return "\n".join(lines)
 
 
+def output_jwt(
+    jwt_token: str,
+    issued_at: int,
+    expires_at: int,
+    output_format: str,
+    quiet: bool
+) -> None:
+    """
+    Output the JWT in the specified format.
+
+    Args:
+        jwt_token: The JWT string
+        issued_at: Unix timestamp when JWT was issued
+        expires_at: Unix timestamp when JWT expires
+        output_format: Output format (text, json, env, header)
+        quiet: Suppress non-essential output
+    """
+    if output_format == 'json':
+        output = {
+            'jwt': jwt_token,
+            'issued_at': datetime.fromtimestamp(issued_at, tz=timezone.utc).isoformat(),
+            'expires_at': datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat()
+        }
+        print(json.dumps(output, indent=2))
+
+    elif output_format == 'env':
+        print(f"export GITHUB_TOKEN={jwt_token}")
+
+    elif output_format == 'header':
+        print(f"Authorization: Bearer {jwt_token}")
+
+    else:  # text (default)
+        print(jwt_token)
+
+
 def output_token(
     token_data: Dict[str, Any],
     output_format: str,
@@ -422,7 +457,7 @@ def get_installation_token(
     if not debug:
         eprint(f"Generating JWT (expires in {jwt_expiry} seconds)...")
 
-    jwt_token = generate_jwt(client_id, pem_path, jwt_expiry, debug)
+    jwt_token, issued_at, expires_at = generate_jwt(client_id, pem_path, jwt_expiry, debug)
 
     # Prepare API request
     endpoint = f"{api_url.rstrip('/')}/app/installations/{installation_id}/access_tokens"
@@ -479,6 +514,12 @@ Examples:
 
   # Provide all arguments
   %(prog)s --client-id Iv1.abc123 --pem-path ~/.ssh/app.pem --installation-id 12345678
+
+  # Generate only JWT (no installation token)
+  %(prog)s --jwt --client-id Iv1.abc123 --pem-path app.pem
+
+  # Generate JWT in JSON format
+  %(prog)s --jwt --client-id Iv1.abc123 --pem-path app.pem --output-format json
 
   # Output as environment variable
   %(prog)s --client-id Iv1.abc123 --pem-path app.pem --installation-id 12345678 --output-format env
@@ -570,6 +611,11 @@ Examples:
         help='Skip input validation'
     )
     parser.add_argument(
+        '--jwt',
+        action='store_true',
+        help='Generate and output only the JWT (do not exchange for installation token)'
+    )
+    parser.add_argument(
         '--version',
         action='version',
         version=f'%(prog)s {__version__}'
@@ -580,6 +626,9 @@ Examples:
     # Validate mutually exclusive options
     if args.quiet and args.debug:
         parser.error("--quiet and --debug are mutually exclusive")
+    
+    if args.jwt and args.installation_id:
+        parser.error("--jwt and --installation-id are mutually exclusive")
 
     return args
 
@@ -603,8 +652,9 @@ def main() -> None:
     if not pem_path_str:
         pem_path_str = prompt_for_input("Enter path to private key PEM file: ")
 
+    # Installation ID is only needed when not in JWT-only mode
     installation_id = args.installation_id
-    if not installation_id:
+    if not args.jwt and not installation_id:
         installation_id = prompt_for_input("Enter Installation ID: ")
 
     # Expand path
@@ -616,7 +666,8 @@ def main() -> None:
     # Validate inputs
     try:
         validate_client_id(client_id, args.force)
-        validate_installation_id(installation_id, args.force)
+        if not args.jwt:
+            validate_installation_id(installation_id, args.force)
         validate_pem_file(pem_path, args.force)
     except ValidationError as e:
         fatal_error(str(e))
@@ -626,10 +677,33 @@ def main() -> None:
         eprint(f"Reading private key from: {pem_path}")
 
     debug_print(f"Client ID: {client_id}", args.debug)
-    debug_print(f"Installation ID: {installation_id}", args.debug)
+    if not args.jwt:
+        debug_print(f"Installation ID: {installation_id}", args.debug)
     debug_print(f"PEM path: {pem_path}", args.debug)
     debug_print(f"API URL: {args.api_url}", args.debug)
     debug_print(f"User-Agent: {args.user_agent}", args.debug)
+
+    # If JWT-only mode, generate and output JWT then exit
+    if args.jwt:
+        if not args.quiet and not args.debug:
+            eprint(f"Generating JWT (expires in {args.jwt_expiry} seconds)...")
+        
+        jwt_token, issued_at, expires_at = generate_jwt(
+            client_id=client_id,
+            pem_path=pem_path,
+            expiry_seconds=args.jwt_expiry,
+            debug=args.debug
+        )
+        
+        if args.debug:
+            debug_print("Successfully generated JWT!", args.debug)
+            debug_print(f"JWT: {mask_token(jwt_token)}", args.debug)
+            eprint()  # Blank line before output
+        elif not args.quiet:
+            eprint("Successfully generated JWT!\n")
+        
+        output_jwt(jwt_token, issued_at, expires_at, args.output_format, args.quiet)
+        return
 
     # Get installation token
     token_data = get_installation_token(
