@@ -1,0 +1,691 @@
+#!/usr/bin/env python3
+"""
+gh-tokengen - an UNOFFICIAL GitHub App Authentication Token Generator
+
+Generates installation tokens for GitHub Apps by creating a JWT from a private key
+and exchanging it with the GitHub API.
+
+NOTE:  This program is NOT supported or endorsed by GitHub.  Use at own risk.
+"""
+
+import argparse
+import json
+import sys
+import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Dict, Any, Optional, Tuple, NoReturn
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
+import base64
+import hashlib
+import hmac
+
+__version__ = "1.0.0"
+
+# Constants
+DEFAULT_API_URL = "https://api.github.com"
+DEFAULT_JWT_EXPIRY = 600
+MAX_JWT_EXPIRY = 600
+MIN_JWT_EXPIRY = 1
+DEFAULT_USER_AGENT = f"GitHubAppAuth-Script/{__version__}"
+
+
+class ValidationError(Exception):
+    """Raised when input validation fails."""
+    pass
+
+
+def eprint(*args, **kwargs) -> None:
+    """Print to stderr."""
+    print(*args, file=sys.stderr, **kwargs)
+
+
+def debug_print(message: str, debug: bool) -> None:
+    """Print debug message to stderr if debug mode is enabled."""
+    if debug:
+        eprint(f"[DEBUG] {message}")
+
+
+def fatal_error(message: str) -> NoReturn:
+    """Print error message to stderr and exit with status 1."""
+    eprint(f"Error: {message}")
+    sys.exit(1)
+
+
+def expand_path(path_str: str) -> Path:
+    """Expand ~ and environment variables in path string."""
+    return Path(path_str).expanduser().resolve()
+
+
+def validate_pem_file(pem_path: Path, force: bool) -> None:
+    """
+    Validate that the PEM file exists and appears to be a valid private key.
+
+    Args:
+        pem_path: Path to the PEM file
+        force: Skip validation if True
+
+    Raises:
+        ValidationError: If validation fails
+    """
+    if force:
+        debug_print(f"Skipping validation (--force enabled)", True)
+        return
+
+    if not pem_path.exists():
+        raise ValidationError(f"PEM file not found: {pem_path}")
+
+    if not pem_path.is_file():
+        raise ValidationError(f"PEM path is not a file: {pem_path}")
+
+    if not pem_path.stat().st_mode & 0o400:
+        raise ValidationError(f"PEM file is not readable: {pem_path}")
+
+    # Basic format validation
+    try:
+        content = pem_path.read_text()
+        if "BEGIN" not in content or "PRIVATE KEY" not in content:
+            raise ValidationError(f"File does not appear to be a valid private key: {pem_path}")
+    except Exception as e:
+        raise ValidationError(f"Failed to read PEM file: {e}")
+
+
+def validate_client_id(client_id: str, force: bool) -> None:
+    """
+    Validate GitHub App Client ID format.
+
+    Args:
+        client_id: The Client ID to validate
+        force: Skip validation if True
+
+    Raises:
+        ValidationError: If validation fails
+    """
+    if force:
+        return
+
+    if not client_id:
+        raise ValidationError("Client ID cannot be empty")
+
+    if not client_id.startswith("Iv1."):
+        raise ValidationError(f"Client ID should start with 'Iv1.': {client_id}")
+
+
+def validate_installation_id(installation_id: str, force: bool) -> None:
+    """
+    Validate Installation ID is numeric.
+
+    Args:
+        installation_id: The Installation ID to validate
+        force: Skip validation if True
+
+    Raises:
+        ValidationError: If validation fails
+    """
+    if force:
+        return
+
+    if not installation_id:
+        raise ValidationError("Installation ID cannot be empty")
+
+    if not installation_id.isdigit():
+        raise ValidationError(f"Installation ID must be numeric: {installation_id}")
+
+
+def validate_jwt_expiry(expiry: int) -> None:
+    """
+    Validate JWT expiry is within allowed range.
+
+    Args:
+        expiry: JWT expiry time in seconds
+
+    Raises:
+        ValidationError: If expiry is out of range
+    """
+    if expiry < MIN_JWT_EXPIRY or expiry > MAX_JWT_EXPIRY:
+        raise ValidationError(
+            f"JWT expiry must be between {MIN_JWT_EXPIRY} and {MAX_JWT_EXPIRY} seconds"
+        )
+
+
+def base64url_encode(data: bytes) -> str:
+    """Encode bytes to base64url format without padding."""
+    return base64.urlsafe_b64encode(data).rstrip(b'=').decode('utf-8')
+
+
+def generate_jwt(
+    client_id: str,
+    pem_path: Path,
+    expiry_seconds: int,
+    debug: bool
+) -> str:
+    """
+    Generate a JWT for GitHub App authentication.
+
+    Args:
+        client_id: GitHub App Client ID
+        pem_path: Path to private key PEM file
+        expiry_seconds: JWT expiry time in seconds
+        debug: Enable debug output
+
+    Returns:
+        The generated JWT string
+    """
+    try:
+        # Import cryptography library
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.hazmat.backends import default_backend
+        import jwt as pyjwt
+
+        # Read private key
+        with open(pem_path, 'rb') as key_file:
+            private_key = serialization.load_pem_private_key(
+                key_file.read(),
+                password=None,
+                backend=default_backend()
+            )
+
+        # Generate JWT
+        now = int(time.time())
+        payload = {
+            'iat': now - 60,  # Issued at (with 60s clock skew tolerance)
+            'exp': now + expiry_seconds,  # Expiration
+            'iss': client_id  # Issuer (Client ID)
+        }
+
+        token = pyjwt.encode(payload, private_key, algorithm='RS256')
+
+        if debug:
+            exp_time = datetime.fromtimestamp(payload['exp'], tz=timezone.utc)
+            debug_print(f"JWT generated successfully", debug)
+            debug_print(f"JWT issued at: {datetime.fromtimestamp(payload['iat'], tz=timezone.utc)}", debug)
+            debug_print(f"JWT expires at: {exp_time}", debug)
+            debug_print(f"JWT preview: {token[:20]}...{token[-20:]}", debug)
+
+        return token
+
+    except ImportError:
+        fatal_error(
+            "Required dependencies not found. Install with:\n"
+            "  pip install PyJWT cryptography"
+        )
+    except Exception as e:
+        fatal_error(f"Failed to generate JWT: {e}")
+
+
+def mask_token(token: str) -> str:
+    """Mask a token for safe display, showing only first and last few characters."""
+    if len(token) <= 10:
+        return "***"
+    return f"{token[:7]}...{token[-4:]}"
+
+
+def format_headers_for_display(headers: Dict[str, str]) -> str:
+    """Format HTTP headers for display, masking sensitive values."""
+    lines = []
+    for key, value in headers.items():
+        if key.lower() == 'authorization':
+            # Mask the token in Authorization header
+            parts = value.split(' ')
+            if len(parts) == 2:
+                value = f"{parts[0]} {mask_token(parts[1])}"
+        lines.append(f"  {key}: {value}")
+    return "\n".join(lines)
+
+
+def make_api_request(
+    url: str,
+    token: str,
+    user_agent: str,
+    debug: bool,
+    show_headers: bool
+) -> Tuple[Dict[str, Any], Dict[str, str]]:
+    """
+    Make an API request to GitHub.
+
+    Args:
+        url: API endpoint URL
+        token: JWT token for authentication
+        user_agent: User-Agent header value
+        debug: Enable debug output
+        show_headers: Show response headers
+
+    Returns:
+        Tuple of (response_data, response_headers)
+    """
+    headers = {
+        'Authorization': f'Bearer {token}',
+        'Accept': 'application/vnd.github+json',
+        'User-Agent': user_agent,
+        'X-GitHub-Api-Version': '2022-11-28'
+    }
+
+    if debug:
+        debug_print(f"Making API request to: {url}", debug)
+        debug_print(f"Request headers:\n{format_headers_for_display(headers)}", debug)
+
+    try:
+        request = Request(url, headers=headers, method='POST')
+        with urlopen(request) as response:
+            response_headers = dict(response.headers)
+            data = json.loads(response.read().decode('utf-8'))
+
+            if show_headers or debug:
+                eprint("\nResponse headers:")
+                for key, value in response_headers.items():
+                    eprint(f"  {key}: {value}")
+                eprint()
+
+            return data, response_headers
+
+    except HTTPError as e:
+        error_body = e.read().decode('utf-8')
+        try:
+            error_data = json.loads(error_body)
+            error_msg = error_data.get('message', error_body)
+        except:
+            error_msg = error_body
+        fatal_error(f"HTTP {e.code} error from GitHub API: {error_msg}")
+    except URLError as e:
+        fatal_error(f"Failed to connect to GitHub API: {e.reason}")
+    except Exception as e:
+        fatal_error(f"Unexpected error during API request: {e}")
+
+
+def format_expiration(
+    expires_at: str,
+    format_type: str
+) -> str:
+    """
+    Format expiration time according to specified format.
+
+    Args:
+        expires_at: ISO 8601 timestamp string
+        format_type: Format type (human, iso8601, relative, unix)
+
+    Returns:
+        Formatted expiration string
+    """
+    try:
+        exp_dt = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+
+        if format_type == 'iso8601':
+            return exp_dt.isoformat()
+        elif format_type == 'unix':
+            return str(int(exp_dt.timestamp()))
+        elif format_type == 'relative':
+            now = datetime.now(timezone.utc)
+            delta = exp_dt - now
+            minutes = int(delta.total_seconds() / 60)
+            return f"in {minutes} minutes"
+        else:  # human (default)
+            now = datetime.now(timezone.utc)
+            delta = exp_dt - now
+            minutes = int(delta.total_seconds() / 60)
+            formatted_time = exp_dt.strftime('%Y-%m-%d %H:%M:%S UTC')
+            return f"in {minutes} minutes ({formatted_time})"
+    except Exception as e:
+        debug_print(f"Failed to parse expiration time: {e}", True)
+        return expires_at
+
+
+def format_permissions(permissions: Dict[str, str]) -> str:
+    """Format permissions dictionary for display."""
+    if not permissions:
+        return "  (none)"
+
+    lines = []
+    for resource, level in sorted(permissions.items()):
+        lines.append(f"  {resource}: {level}")
+    return "\n".join(lines)
+
+
+def output_token(
+    token_data: Dict[str, Any],
+    output_format: str,
+    quiet: bool,
+    timestamp_format: str
+) -> None:
+    """
+    Output the installation token in the specified format.
+
+    Args:
+        token_data: Token response data from GitHub API
+        output_format: Output format (text, json, env, header)
+        quiet: Suppress non-essential output
+        timestamp_format: How to format timestamps
+    """
+    token = token_data.get('token', '')
+
+    if output_format == 'json':
+        output = {
+            'token': token,
+            'expires_at': token_data.get('expires_at', ''),
+            'permissions': token_data.get('permissions', {}),
+            'repository_selection': token_data.get('repository_selection', '')
+        }
+
+        # Calculate expires_in_seconds
+        try:
+            exp_dt = datetime.fromisoformat(
+                token_data.get('expires_at', '').replace('Z', '+00:00')
+            )
+            now = datetime.now(timezone.utc)
+            expires_in = int((exp_dt - now).total_seconds())
+            output['expires_in_seconds'] = expires_in
+        except:
+            pass
+
+        print(json.dumps(output, indent=2))
+
+    elif output_format == 'env':
+        print(f"export GITHUB_TOKEN={token}")
+
+    elif output_format == 'header':
+        print(f"Authorization: Bearer {token}")
+
+    else:  # text (default)
+        print(token)
+
+
+def get_installation_token(
+    client_id: str,
+    pem_path: Path,
+    installation_id: str,
+    api_url: str,
+    jwt_expiry: int,
+    user_agent: str,
+    debug: bool,
+    show_headers: bool,
+    dry_run: bool
+) -> Dict[str, Any]:
+    """
+    Get an installation token from GitHub API.
+
+    Args:
+        client_id: GitHub App Client ID
+        pem_path: Path to private key PEM file
+        installation_id: Installation ID
+        api_url: GitHub API base URL
+        jwt_expiry: JWT expiry time in seconds
+        user_agent: User-Agent header value
+        debug: Enable debug output
+        show_headers: Show response headers
+        dry_run: Don't actually make the API call
+
+    Returns:
+        Token data from GitHub API
+    """
+    # Generate JWT
+    if not debug:
+        eprint(f"Generating JWT (expires in {jwt_expiry} seconds)...")
+
+    jwt_token = generate_jwt(client_id, pem_path, jwt_expiry, debug)
+
+    # Prepare API request
+    endpoint = f"{api_url.rstrip('/')}/app/installations/{installation_id}/access_tokens"
+
+    if dry_run:
+        eprint("\n[DRY RUN] Would make the following API request:")
+        eprint(f"  URL: {endpoint}")
+        eprint(f"  Method: POST")
+        eprint(f"  Headers:")
+        headers = {
+            'Authorization': f'Bearer {jwt_token}',
+            'Accept': 'application/vnd.github+json',
+            'User-Agent': user_agent,
+            'X-GitHub-Api-Version': '2022-11-28'
+        }
+        eprint(format_headers_for_display(headers))
+        eprint("\n[DRY RUN] Exiting without making actual API call")
+        sys.exit(0)
+
+    # Exchange JWT for installation token
+    if not debug:
+        eprint("Exchanging JWT for installation token...")
+
+    token_data, response_headers = make_api_request(
+        endpoint,
+        jwt_token,
+        user_agent,
+        debug,
+        show_headers
+    )
+
+    return token_data
+
+
+def prompt_for_input(prompt: str) -> str:
+    """Prompt user for input on stderr."""
+    eprint(prompt, end='')
+    try:
+        return input().strip()
+    except (EOFError, KeyboardInterrupt):
+        eprint()
+        fatal_error("Input cancelled by user")
+
+
+def parse_arguments() -> argparse.Namespace:
+    """Parse and return command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Generate installation tokens for GitHub Apps",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Interactive mode (prompts for all inputs)
+  %(prog)s
+
+  # Provide all arguments
+  %(prog)s --client-id Iv1.abc123 --pem-path ~/.ssh/app.pem --installation-id 12345678
+
+  # Output as environment variable
+  %(prog)s --client-id Iv1.abc123 --pem-path app.pem --installation-id 12345678 --output-format env
+
+  # Debug mode with headers
+  %(prog)s --debug --headers --client-id Iv1.abc123 --pem-path app.pem --installation-id 12345678
+
+  # Quiet mode (token only)
+  %(prog)s --quiet --client-id Iv1.abc123 --pem-path app.pem --installation-id 12345678
+
+  # Dry run to test configuration
+  %(prog)s --dry-run --client-id Iv1.abc123 --pem-path app.pem --installation-id 12345678
+
+  # GitHub Enterprise with custom API URL
+  %(prog)s --api-url https://github.company.com/api/v3 --client-id Iv1.abc123 --pem-path app.pem --installation-id 12345678
+        """
+    )
+
+    # Input arguments
+    parser.add_argument(
+        '--client-id',
+        help='GitHub App Client ID (e.g., Iv1.1234567890abcdef)'
+    )
+    parser.add_argument(
+        '--pem-path',
+        help='Path to private key PEM file'
+    )
+    parser.add_argument(
+        '--installation-id',
+        help='GitHub App Installation ID'
+    )
+
+    # Configuration arguments
+    parser.add_argument(
+        '--api-url',
+        default=DEFAULT_API_URL,
+        help=f'GitHub API base URL (default: {DEFAULT_API_URL})'
+    )
+    parser.add_argument(
+        '--jwt-expiry',
+        type=int,
+        default=DEFAULT_JWT_EXPIRY,
+        help=f'JWT expiry time in seconds, 1-{MAX_JWT_EXPIRY} (default: {DEFAULT_JWT_EXPIRY})'
+    )
+    parser.add_argument(
+        '--user-agent',
+        default=DEFAULT_USER_AGENT,
+        help=f'Custom User-Agent header (default: {DEFAULT_USER_AGENT})'
+    )
+
+    # Output arguments
+    parser.add_argument(
+        '--output-format',
+        choices=['text', 'json', 'env', 'header'],
+        default='text',
+        help='Output format (default: text)'
+    )
+    parser.add_argument(
+        '--timestamp-format',
+        choices=['human', 'iso8601', 'relative', 'unix'],
+        default='human',
+        help='Timestamp format (default: human)'
+    )
+
+    # Mode arguments
+    parser.add_argument(
+        '--debug',
+        action='store_true',
+        help='Enable debug output (verbose mode)'
+    )
+    parser.add_argument(
+        '--quiet',
+        action='store_true',
+        help='Quiet mode - only output the token'
+    )
+    parser.add_argument(
+        '--dry-run',
+        action='store_true',
+        help='Validate inputs and show what would be done without making API calls'
+    )
+    parser.add_argument(
+        '--headers',
+        action='store_true',
+        help='Show response headers'
+    )
+    parser.add_argument(
+        '--force',
+        action='store_true',
+        help='Skip input validation'
+    )
+    parser.add_argument(
+        '--version',
+        action='version',
+        version=f'%(prog)s {__version__}'
+    )
+
+    args = parser.parse_args()
+
+    # Validate mutually exclusive options
+    if args.quiet and args.debug:
+        parser.error("--quiet and --debug are mutually exclusive")
+
+    return args
+
+
+def main() -> None:
+    """Main entry point."""
+    args = parse_arguments()
+
+    # Validate JWT expiry
+    try:
+        validate_jwt_expiry(args.jwt_expiry)
+    except ValidationError as e:
+        fatal_error(str(e))
+
+    # Get or prompt for required inputs
+    client_id = args.client_id
+    if not client_id:
+        client_id = prompt_for_input("Enter GitHub App Client ID: ")
+
+    pem_path_str = args.pem_path
+    if not pem_path_str:
+        pem_path_str = prompt_for_input("Enter path to private key PEM file: ")
+
+    installation_id = args.installation_id
+    if not installation_id:
+        installation_id = prompt_for_input("Enter Installation ID: ")
+
+    # Expand path
+    try:
+        pem_path = expand_path(pem_path_str)
+    except Exception as e:
+        fatal_error(f"Invalid path: {e}")
+
+    # Validate inputs
+    try:
+        validate_client_id(client_id, args.force)
+        validate_installation_id(installation_id, args.force)
+        validate_pem_file(pem_path, args.force)
+    except ValidationError as e:
+        fatal_error(str(e))
+
+    # Show progress unless in quiet mode
+    if not args.quiet:
+        eprint(f"Reading private key from: {pem_path}")
+
+    debug_print(f"Client ID: {client_id}", args.debug)
+    debug_print(f"Installation ID: {installation_id}", args.debug)
+    debug_print(f"PEM path: {pem_path}", args.debug)
+    debug_print(f"API URL: {args.api_url}", args.debug)
+    debug_print(f"User-Agent: {args.user_agent}", args.debug)
+
+    # Get installation token
+    token_data = get_installation_token(
+        client_id=client_id,
+        pem_path=pem_path,
+        installation_id=installation_id,
+        api_url=args.api_url,
+        jwt_expiry=args.jwt_expiry,
+        user_agent=args.user_agent,
+        debug=args.debug,
+        show_headers=args.headers,
+        dry_run=args.dry_run
+    )
+
+    # Show success message and permissions in debug mode
+    if args.debug:
+        debug_print("Successfully obtained installation token!", args.debug)
+        debug_print(f"Token: {mask_token(token_data.get('token', ''))}", args.debug)
+
+        expires_at = token_data.get('expires_at', '')
+        if expires_at:
+            debug_print(f"Expires at: {expires_at}", args.debug)
+
+        permissions = token_data.get('permissions', {})
+        if permissions:
+            eprint("\n[DEBUG] Permissions granted:")
+            eprint(format_permissions(permissions))
+
+        repo_selection = token_data.get('repository_selection', '')
+        if repo_selection:
+            debug_print(f"Repository selection: {repo_selection}", args.debug)
+
+        eprint()  # Blank line before output
+    elif not args.quiet:
+        eprint("Successfully obtained installation token!\n")
+
+    # Output token
+    if args.quiet:
+        output_token(token_data, args.output_format, True, args.timestamp_format)
+    else:
+        if args.output_format == 'text':
+            # For text format, show token and expiration in non-quiet mode
+            print(f"Token: {token_data.get('token', '')}\n")
+            expires_at = token_data.get('expires_at', '')
+            if expires_at:
+                formatted_exp = format_expiration(expires_at, args.timestamp_format)
+                print(f"Expires: {formatted_exp}")
+        else:
+            output_token(token_data, args.output_format, False, args.timestamp_format)
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except KeyboardInterrupt:
+        eprint("\nInterrupted by user")
+        sys.exit(130)
+    except Exception as e:
+        fatal_error(f"Unexpected error: {e}")
