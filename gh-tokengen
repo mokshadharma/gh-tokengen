@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, NoReturn
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 import base64
 import hashlib
 import hmac
@@ -146,6 +147,53 @@ def validate_jwt_expiry(expiry: int) -> None:
     if expiry < MIN_JWT_EXPIRY or expiry > MAX_JWT_EXPIRY:
         raise ValidationError(
             f"JWT expiry must be between {MIN_JWT_EXPIRY} and {MAX_JWT_EXPIRY} seconds"
+        )
+
+
+def validate_api_url(api_url: str) -> None:
+    """
+    Validate that the API URL has proper syntax and uses http:// or https://.
+
+    Args:
+        api_url: The API URL to validate
+
+    Raises:
+        ValidationError: If the URL is invalid or uses an unsupported scheme
+    """
+    if not api_url:
+        raise ValidationError("API URL cannot be empty")
+
+    try:
+        parsed = urlparse(api_url)
+        
+        # Check if scheme is present and valid
+        if not parsed.scheme:
+            raise ValidationError(
+                f"Invalid API URL: '{api_url}'\n"
+                f"The URL must include a scheme (http:// or https://).\n"
+                f"Example: https://api.github.com"
+            )
+        
+        if parsed.scheme not in ('http', 'https'):
+            raise ValidationError(
+                f"Invalid API URL scheme: '{parsed.scheme}'\n"
+                f"The URL must use either 'http://' or 'https://'.\n"
+                f"Example: https://api.github.com"
+            )
+        
+        # Check if netloc (domain) is present
+        if not parsed.netloc:
+            raise ValidationError(
+                f"Invalid API URL: '{api_url}'\n"
+                f"The URL must include a valid domain.\n"
+                f"Example: https://api.github.com"
+            )
+            
+    except ValueError as e:
+        raise ValidationError(
+            f"Invalid API URL format: '{api_url}'\n"
+            f"Error: {e}\n"
+            f"Example of valid URL: https://api.github.com"
         )
 
 
@@ -637,9 +685,10 @@ def main() -> None:
     """Main entry point."""
     args = parse_arguments()
 
-    # Validate JWT expiry
+    # Validate arguments before doing anything else
     try:
         validate_jwt_expiry(args.jwt_expiry)
+        validate_api_url(args.api_url)
     except ValidationError as e:
         fatal_error(str(e))
 
