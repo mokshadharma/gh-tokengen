@@ -108,8 +108,8 @@ def validate_client_id(client_id: str, force: bool) -> None:
     if not client_id:
         raise ValidationError("Client ID cannot be empty")
 
-    if not client_id.startswith("Iv1."):
-        raise ValidationError(f"Client ID should start with 'Iv1.': {client_id}")
+    if not client_id.isalnum():
+        raise ValidationError(f"Client ID must contain only alphanumeric characters and no whitespace: {client_id}")
 
 
 def validate_installation_id(installation_id: str, force: bool) -> None:
