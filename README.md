@@ -26,22 +26,45 @@ This tool is useful for developers and system administrators who need to program
 
 ### Dependencies
 
-- Python 3.6 or higher
+- Python 3.14 or higher
 - `PyJWT` library
 - `cryptography` library
 
 ### Installation
 
-Install the required Python dependencies:
+First, create and activate a virtual environment:
 
+**Using uv (recommended):**
 ```bash
-pip install PyJWT cryptography
+uv venv
+source .venv/bin/activate  # On macOS/Linux
+# On Windows: .venv\Scripts\activate
 ```
 
-Or if you're using a requirements file:
-
+**Using standard Python:**
 ```bash
-pip install -r requirements.txt
+python -m venv .venv
+source .venv/bin/activate  # On macOS/Linux
+# On Windows: .venv\Scripts\activate
+```
+
+Then install the required dependencies:
+
+**Using uv:**
+```bash
+uv pip install cryptography pyjwt
+```
+
+**Using pip:**
+```bash
+pip install cryptography pyjwt
+```
+
+**Alternative - Install from pyproject.toml:**
+```bash
+uv pip install -e .  # Using uv
+# or
+pip install -e .     # Using pip
 ```
 
 ### GitHub App Requirements
