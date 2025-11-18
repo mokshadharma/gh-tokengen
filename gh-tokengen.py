@@ -1010,10 +1010,13 @@ def prompt_for_input(
             def validate(self, document):
                 text = document.text.strip()
 
+                # Clear error message at the start of validation
+                # It will be set again if there's an error
+                state.error_message = ""
+
                 if enable_path_completion or no_path_completion:
                     # Path validation (with or without completion)
                     if not text:
-                        state.error_message = ""
                         return
 
                     # Expand path for validation
@@ -1046,7 +1049,6 @@ def prompt_for_input(
                                 raise PTValidationError(message="file is not readable")
 
                             # Valid file
-                            state.error_message = ""
                             return
 
                         # Determine base directory
@@ -1183,7 +1185,6 @@ def prompt_for_input(
                             # No slash - check in base directory
                             # Special case: ~ or $HOME are always valid (they're directories)
                             if text in ('~', '$HOME'):
-                                state.error_message = ""
                                 return
 
                             if not base_dir.exists():
@@ -1229,17 +1230,12 @@ def prompt_for_input(
                                 state.error_message = "no match"
                                 raise PTValidationError(message="no match")
 
-                        # Valid input
-                        state.error_message = ""
-
                     except PTValidationError:
                         raise
                     except Exception as e:
                         # Unexpected error - allow typing to continue
                         pass
-                else:
-                    # Non-path validation (only on Enter, handled in key binding)
-                    pass
+                # Non-path validation is handled in the Enter key binding
 
         validator = InputValidator()
 
@@ -1527,7 +1523,6 @@ def prompt_for_input(
                 if validator_func:
                     try:
                         validator_func(text)
-                        state.error_message = ""
                     except ValidationError as e:
                         state.error_message = str(e).split('\n')[0]  # First line only
                         return
@@ -1570,6 +1565,14 @@ def prompt_for_input(
             bottom_toolbar=bottom_toolbar if enable_path_completion or no_path_completion or validator_func else None,
             reserve_space_for_menu=8  # Reserve space for completion menu
         )
+
+        # In no_path_completion mode, clear errors when text changes (only validate on Enter)
+        if no_path_completion:
+            def on_text_changed(_):
+                """Clear error message when user types (will validate again on Enter)."""
+                state.error_message = ""
+
+            session.default_buffer.on_text_changed += on_text_changed
 
         # Add auto-expansion handler for path completion
         if enable_path_completion:
