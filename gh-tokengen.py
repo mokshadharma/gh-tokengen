@@ -897,12 +897,13 @@ def prompt_for_input(
         # Create output to stderr
         output = create_output(stdout=sys.stderr)
 
-        # Shared state for error display
+        # Shared state for error display and yank buffer
         class ValidationState:
             def __init__(self):
                 self.error_message: str = ""
                 self.flash_error: bool = False
                 self.flash_thread: Optional[threading.Thread] = None
+                self.yank_buffer: str = ""  # Store last deleted text for yank
 
         state = ValidationState()
 
@@ -1106,13 +1107,15 @@ def prompt_for_input(
 
         @kb.add(Keys.ControlW)
         def handle_ctrl_w(event):
-            """Handle Ctrl-W (delete word) - keep completions visible."""
+            """Handle Ctrl-W (delete word) - keep completions visible and save to yank buffer."""
             buf = event.app.current_buffer
             # Delete word before cursor (standard behavior)
             if buf.text:
                 pos = buf.cursor_position
                 # Find start of word
                 text_before = buf.text[:pos]
+                original_length = len(text_before)
+                
                 # Skip trailing whitespace
                 while text_before and text_before[-1] in ' \t':
                     text_before = text_before[:-1]
@@ -1124,9 +1127,47 @@ def prompt_for_input(
                     text_before = text_before[:-1]
 
                 new_pos = len(text_before)
+                
+                # Save deleted text to yank buffer
+                deleted_text = buf.text[new_pos:pos]
+                if deleted_text:
+                    state.yank_buffer = deleted_text
+                
                 buf.cursor_position = new_pos
                 buf.text = text_before + buf.text[pos:]
 
+                # Trigger completions if path completion is enabled
+                if enable_path_completion and not buf.complete_state:
+                    buf.start_completion(select_first=False)
+
+        @kb.add(Keys.ControlU)
+        def handle_ctrl_u(event):
+            """Handle Ctrl-U (delete from beginning of line to cursor) - save to yank buffer."""
+            buf = event.app.current_buffer
+            if buf.cursor_position > 0:
+                # Save deleted text to yank buffer
+                deleted_text = buf.text[:buf.cursor_position]
+                if deleted_text:
+                    state.yank_buffer = deleted_text
+                
+                # Delete from start to cursor
+                buf.text = buf.text[buf.cursor_position:]
+                buf.cursor_position = 0
+                
+                # Trigger completions if path completion is enabled
+                if enable_path_completion and not buf.complete_state:
+                    buf.start_completion(select_first=False)
+
+        @kb.add(Keys.ControlY)
+        def handle_ctrl_y(event):
+            """Handle Ctrl-Y (yank/paste) - paste back last deleted text."""
+            buf = event.app.current_buffer
+            if state.yank_buffer:
+                # Insert yanked text at cursor position
+                pos = buf.cursor_position
+                buf.text = buf.text[:pos] + state.yank_buffer + buf.text[pos:]
+                buf.cursor_position = pos + len(state.yank_buffer)
+                
                 # Trigger completions if path completion is enabled
                 if enable_path_completion and not buf.complete_state:
                     buf.start_completion(select_first=False)
