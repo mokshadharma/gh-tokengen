@@ -1116,6 +1116,9 @@ def prompt_for_input(
                 # Skip trailing whitespace
                 while text_before and text_before[-1] in ' \t':
                     text_before = text_before[:-1]
+                # Delete trailing slash if present
+                if text_before and text_before[-1] == '/':
+                    text_before = text_before[:-1]
                 # Delete word characters
                 while text_before and text_before[-1] not in ' \t/':
                     text_before = text_before[:-1]
