@@ -14,7 +14,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, Any, Optional, Tuple, NoReturn
+from typing import Dict, Any, Optional, Tuple, NoReturn, Callable
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -590,6 +590,203 @@ def get_installation_token(
     return token_data
 
 
+def natural_sort_key(s: str) -> list:
+    """
+    Generate a sort key for natural sorting (handles numbers in strings).
+
+    Args:
+        s: String to generate sort key for
+
+    Returns:
+        List of alternating strings and integers for proper sorting
+    """
+    import re
+    return [int(text) if text.isdigit() else text.lower()
+            for text in re.split(r'(\d+)', s)]
+
+
+class FuzzyPemCompleter:
+    """
+    Custom completer for PEM file selection with fuzzy matching.
+
+    Supports directory navigation with fuzzy matching on each path component.
+    Matches *.pem files and directories, with context-aware searching.
+
+    Implements prompt_toolkit's Completer protocol via duck typing.
+    """
+
+    def __init__(self, base_dir: Path):
+        """
+        Initialize the fuzzy completer.
+
+        Args:
+            base_dir: Starting directory for path completion
+        """
+        self.base_dir = base_dir
+        from rapidfuzz import fuzz, process
+        self.fuzz = fuzz
+        self.process = process
+
+    def _expand_path(self, path_str: str) -> Path:
+        """Expand ~ and $HOME in path string."""
+        expanded = path_str.replace('$HOME', str(Path.home()))
+        return Path(expanded).expanduser()
+
+    def _get_candidates(self, directory: Path, is_final_segment: bool) -> list[Path]:
+        """
+        Get completion candidates from a directory.
+
+        Args:
+            directory: Directory to search in
+            is_final_segment: If True, include *.pem files; if False, only directories
+
+        Returns:
+            List of Path objects for candidates
+        """
+        if not directory.exists() or not directory.is_dir():
+            return []
+
+        candidates = []
+        try:
+            for item in directory.iterdir():
+                if item.is_dir():
+                    candidates.append(item)
+                elif is_final_segment and item.is_file() and item.suffix == '.pem':
+                    candidates.append(item)
+        except PermissionError:
+            pass
+
+        return candidates
+
+    def _fuzzy_match(self, query: str, candidates: list[Path]) -> list[tuple[str, float, Path]]:
+        """
+        Perform fuzzy matching on candidates.
+
+        Args:
+            query: Search query string
+            candidates: List of Path objects to match against
+
+        Returns:
+            List of tuples (name, score, path) sorted by score then natural sort
+        """
+        if not query:
+            # No query - return all candidates sorted naturally
+            results = [(c.name, 100.0, c) for c in candidates]
+        else:
+            # Fuzzy match against basenames
+            names = [c.name for c in candidates]
+            matches = self.process.extract(
+                query,
+                names,
+                scorer=self.fuzz.WRatio,
+                limit=None
+            )
+
+            # Create lookup dict
+            name_to_path = {c.name: c for c in candidates}
+            results = [(name, score, name_to_path[name]) for name, score, _ in matches if score > 0]
+
+        # Sort by score (descending) then natural sort
+        results.sort(key=lambda x: (-x[1], natural_sort_key(x[0])))
+        return results
+
+    def get_completions(self, document, complete_event):
+        """
+        Generate completions for the current document state.
+
+        Args:
+            document: The prompt_toolkit Document object
+            complete_event: The completion event
+
+        Yields:
+            Completion objects for matching candidates
+        """
+        from prompt_toolkit.completion import Completion
+
+        text = document.text_before_cursor
+
+        # Parse the path into components
+        if '/' in text:
+            # Split into directory parts and final query
+            parts = text.split('/')
+            final_query = parts[-1]
+            dir_parts = parts[:-1]
+
+            # Build the directory path
+            if text.startswith('/'):
+                current_dir = Path('/')
+            elif text.startswith('~/') or text.startswith('$HOME/'):
+                current_dir = self._expand_path(text.split('/')[0])
+            else:
+                current_dir = self.base_dir
+
+            # Navigate through directory parts
+            for i, part in enumerate(dir_parts):
+                if not part or (i == 0 and part in ('~', '$HOME', '')):
+                    continue
+
+                # Get subdirectories and fuzzy match
+                subdirs = [p for p in self._get_candidates(current_dir, False)]
+                if not subdirs:
+                    return
+
+                matches = self._fuzzy_match(part, subdirs)
+                if matches:
+                    # Use best match
+                    current_dir = matches[0][2]
+                else:
+                    return
+
+            # Get candidates for final segment (includes .pem files)
+            candidates = self._get_candidates(current_dir, True)
+            matches = self._fuzzy_match(final_query, candidates)
+
+            # Generate completions
+            for name, score, path in matches:
+                if path.is_dir():
+                    completion_text = name + '/'
+                else:
+                    completion_text = name
+
+                # Calculate how much of the final query to replace
+                yield Completion(
+                    completion_text,
+                    start_position=-len(final_query),
+                    display=completion_text
+                )
+        else:
+            # No slash - match in base directory
+            candidates = self._get_candidates(self.base_dir, True)
+            matches = self._fuzzy_match(text, candidates)
+
+            for name, score, path in matches:
+                if path.is_dir():
+                    completion_text = name + '/'
+                else:
+                    completion_text = name
+
+                yield Completion(
+                    completion_text,
+                    start_position=-len(text),
+                    display=completion_text
+                )
+
+    async def get_completions_async(self, document, complete_event):
+        """
+        Async version of get_completions required by prompt_toolkit.
+
+        Args:
+            document: The prompt_toolkit Document object
+            complete_event: The completion event
+
+        Yields:
+            Completion objects for matching candidates
+        """
+        # Delegate to synchronous version since our operations are fast
+        for completion in self.get_completions(document, complete_event):
+            yield completion
+
+
 def detect_editing_mode_from_inputrc() -> str:
     """
     Detect editing mode (vi or emacs) from ~/.inputrc.
@@ -621,50 +818,382 @@ def detect_editing_mode_from_inputrc() -> str:
     return 'emacs'
 
 
-def prompt_for_input(prompt_text: str, enable_path_completion: bool = False) -> str:
+def prompt_for_input(
+    prompt_text: str,
+    enable_path_completion: bool = False,
+    validator_func: Optional[Callable[[str], None]] = None
+) -> str:
     """
     Prompt user for input on stderr with rich line editing.
 
     Args:
         prompt_text: The prompt to display
-        enable_path_completion: Enable file path autocompletion
+        enable_path_completion: Enable file path autocompletion with fuzzy matching
+        validator_func: Optional validation function for non-path inputs
 
     Returns:
         User input string
     """
     try:
         from prompt_toolkit import prompt, PromptSession
-        from prompt_toolkit.completion import PathCompleter
+        from prompt_toolkit.completion import PathCompleter, Completer, Completion
         from prompt_toolkit.enums import EditingMode
         from prompt_toolkit.output import create_output
+        from prompt_toolkit.validation import Validator, ValidationError as PTValidationError
+        from prompt_toolkit.formatted_text import HTML, ANSI
+        from prompt_toolkit.key_binding import KeyBindings
+        from prompt_toolkit.keys import Keys
+        from prompt_toolkit.layout.processors import Processor, Transformation
+        from prompt_toolkit.document import Document
+        import os
+        import threading
+        import time
 
         # Detect editing mode from ~/.inputrc
         mode_str = detect_editing_mode_from_inputrc()
         editing_mode = EditingMode.VI if mode_str == 'vi' else EditingMode.EMACS
 
-        # Configure completer if path completion is enabled
-        completer = PathCompleter(expanduser=True) if enable_path_completion else None
+        # Configure completer based on path completion setting
+        if enable_path_completion:
+            # Use fuzzy PEM completer with current working directory
+            base_dir = Path(os.getcwd())
+            completer = FuzzyPemCompleter(base_dir)
+        else:
+            completer = None
 
         # Create output to stderr
         output = create_output(stdout=sys.stderr)
 
+        # Shared state for error display
+        class ValidationState:
+            def __init__(self):
+                self.error_message: str = ""
+                self.flash_error: bool = False
+                self.flash_thread: Optional[threading.Thread] = None
+
+        state = ValidationState()
+
+        # Bottom toolbar for error messages
+        def bottom_toolbar():
+            if state.flash_error:
+                # Flashing: black text on red background
+                return HTML('<style bg="ansired" fg="ansiblack">  {}  </style>').format(state.error_message)
+            elif state.error_message:
+                # Normal: red text on black background
+                return HTML('<style fg="ansired">  {}  </style>').format(state.error_message)
+            return ""
+
+        # Validator for inputs
+        class InputValidator(Validator):
+            def validate(self, document):
+                text = document.text.strip()
+
+                if enable_path_completion:
+                    # Path validation with fuzzy matching
+                    if not text:
+                        state.error_message = ""
+                        return
+
+                    # Expand path for validation
+                    try:
+                        expanded = text.replace('$HOME', str(Path.home()))
+                        path = Path(expanded).expanduser()
+
+                        # Determine base directory
+                        if text.startswith('/'):
+                            base_dir = Path('/')
+                        elif text.startswith('~/') or text.startswith('$HOME/'):
+                            base_dir = Path.home()
+                        else:
+                            base_dir = Path(os.getcwd())
+
+                        # Parse path into components
+                        if '/' in text:
+                            parts = text.split('/')
+                            final_query = parts[-1]
+                            dir_parts = parts[:-1]
+
+                            # Build directory path
+                            current_dir = base_dir
+
+                            # Navigate through directory parts
+                            for i, part in enumerate(dir_parts):
+                                if not part:
+                                    if i == 0 and text.startswith('/'):
+                                        current_dir = Path('/')
+                                    continue
+
+                                if i == 0 and part in ('~', '$HOME'):
+                                    current_dir = Path.home()
+                                    continue
+
+                                # Get subdirectories
+                                if not current_dir.exists():
+                                    if final_query:
+                                        state.error_message = "no match"
+                                        raise PTValidationError(message="no match")
+                                    return
+
+                                subdirs = [p for p in current_dir.iterdir() if p.is_dir()] if current_dir.exists() else []
+
+                                # Try exact match first
+                                matched = None
+                                for subdir in subdirs:
+                                    if subdir.name == part:
+                                        matched = subdir
+                                        break
+
+                                if matched:
+                                    current_dir = matched
+                                else:
+                                    # No exact match - this is an error if final_query exists
+                                    if final_query:
+                                        state.error_message = "no match"
+                                        raise PTValidationError(message="no match")
+                                    return
+
+                            # Check final segment if present
+                            if final_query:
+                                # Get candidates in current directory
+                                if not current_dir.exists():
+                                    state.error_message = "no match"
+                                    raise PTValidationError(message="no match")
+
+                                candidates = []
+                                try:
+                                    for item in current_dir.iterdir():
+                                        if item.is_dir() or (item.is_file() and item.suffix == '.pem'):
+                                            candidates.append(item)
+                                except PermissionError:
+                                    state.error_message = "no match"
+                                    raise PTValidationError(message="no match")
+
+                                if not candidates:
+                                    state.error_message = "no match"
+                                    raise PTValidationError(message="no match")
+
+                                # Check for fuzzy matches
+                                from rapidfuzz import fuzz, process
+                                matches = process.extract(
+                                    final_query,
+                                    [c.name for c in candidates],
+                                    scorer=fuzz.WRatio,
+                                    limit=1
+                                )
+
+                                if not matches or matches[0][1] == 0:
+                                    state.error_message = "no match"
+                                    raise PTValidationError(message="no match")
+                        else:
+                            # No slash - check in base directory
+                            # Special case: ~ or $HOME are always valid (they're directories)
+                            if text in ('~', '$HOME'):
+                                state.error_message = ""
+                                return
+
+                            if not base_dir.exists():
+                                state.error_message = "no match"
+                                raise PTValidationError(message="no match")
+
+                            candidates = []
+                            try:
+                                for item in base_dir.iterdir():
+                                    if item.is_dir() or (item.is_file() and item.suffix == '.pem'):
+                                        candidates.append(item)
+                            except PermissionError:
+                                state.error_message = "no match"
+                                raise PTValidationError(message="no match")
+
+                            if not candidates:
+                                state.error_message = "no match"
+                                raise PTValidationError(message="no match")
+
+                            # Check for fuzzy matches
+                            from rapidfuzz import fuzz, process
+                            matches = process.extract(
+                                text,
+                                [c.name for c in candidates],
+                                scorer=fuzz.WRatio,
+                                limit=1
+                            )
+
+                            if not matches or matches[0][1] == 0:
+                                state.error_message = "no match"
+                                raise PTValidationError(message="no match")
+
+                        # Valid input
+                        state.error_message = ""
+
+                    except PTValidationError:
+                        raise
+                    except Exception as e:
+                        # Unexpected error - allow typing to continue
+                        pass
+                else:
+                    # Non-path validation (only on Enter, handled in key binding)
+                    pass
+
+        validator = InputValidator()
+
+        # Custom key bindings
+        kb = KeyBindings()
+
+        @kb.add(Keys.Backspace)
+        def handle_backspace(event):
+            """Handle backspace - keep completions visible."""
+            buf = event.app.current_buffer
+            if buf.cursor_position > 0:
+                buf.delete_before_cursor(count=1)
+                # Trigger completions if path completion is enabled
+                if enable_path_completion and not buf.complete_state:
+                    buf.start_completion(select_first=False)
+
+        @kb.add(Keys.ControlW)
+        def handle_ctrl_w(event):
+            """Handle Ctrl-W (delete word) - keep completions visible."""
+            buf = event.app.current_buffer
+            # Delete word before cursor (standard behavior)
+            if buf.text:
+                pos = buf.cursor_position
+                # Find start of word
+                text_before = buf.text[:pos]
+                # Skip trailing whitespace
+                while text_before and text_before[-1] in ' \t':
+                    text_before = text_before[:-1]
+                # Delete word characters
+                while text_before and text_before[-1] not in ' \t/':
+                    text_before = text_before[:-1]
+
+                new_pos = len(text_before)
+                buf.cursor_position = new_pos
+                buf.text = text_before + buf.text[pos:]
+
+                # Trigger completions if path completion is enabled
+                if enable_path_completion and not buf.complete_state:
+                    buf.start_completion(select_first=False)
+
+        @kb.add(Keys.ControlM)  # Enter key
+        def handle_enter(event):
+            """Handle Enter key - validate before accepting."""
+            buf = event.app.current_buffer
+            text = buf.text.strip()
+
+            if enable_path_completion:
+                # For path input, check if it's a valid .pem file
+                if not text:
+                    return
+
+                try:
+                    expanded = text.replace('$HOME', str(Path.home()))
+                    path = Path(expanded).expanduser()
+
+                    # Resolve relative to current directory
+                    if not path.is_absolute():
+                        path = Path(os.getcwd()) / path
+
+                    # Check if it's a directory
+                    if path.exists() and path.is_dir():
+                        state.error_message = "not a valid *.pem file name"
+                        return
+
+                    # Must end with .pem or resolve to a .pem file
+                    if path.suffix != '.pem':
+                        state.error_message = "not a valid *.pem file name"
+                        return
+
+                except Exception:
+                    return
+            else:
+                # For non-path inputs, validate using custom validator
+                if validator_func:
+                    try:
+                        validator_func(text)
+                        state.error_message = ""
+                    except ValidationError as e:
+                        state.error_message = str(e).split('\n')[0]  # First line only
+                        return
+
+            # Accept the input
+            buf.validate_and_handle()
+
+        @kb.add(Keys.ControlI)  # Tab key
+        def handle_tab(event):
+            """Handle Tab key - show completions or flash error."""
+            buf = event.app.current_buffer
+
+            if enable_path_completion and state.error_message and not buf.complete_state:
+                # Flash the error
+                state.flash_error = True
+
+                def unflash():
+                    time.sleep(0.5)
+                    state.flash_error = False
+                    event.app.invalidate()
+
+                if state.flash_thread is None or not state.flash_thread.is_alive():
+                    state.flash_thread = threading.Thread(target=unflash, daemon=True)
+                    state.flash_thread.start()
+            else:
+                # Normal tab completion
+                buf.complete_next()
+
         # Create a session with the desired settings
         session = PromptSession(
+            message=prompt_text,
             editing_mode=editing_mode,
-            completer=completer,
-            complete_while_typing=False,  # Only complete on Tab
+            completer=completer,  # type: ignore - FuzzyPemCompleter implements Completer protocol
+            complete_while_typing=enable_path_completion,
             output=output,
-            enable_history_search=False
+            enable_history_search=False,
+            validator=validator if enable_path_completion else None,
+            validate_while_typing=enable_path_completion,
+            key_bindings=kb,
+            bottom_toolbar=bottom_toolbar if enable_path_completion or validator_func else None,
+            reserve_space_for_menu=8  # Reserve space for completion menu
         )
 
-        result = session.prompt(prompt_text)
-        return result
+        # Add auto-expansion handler for path completion
+        if enable_path_completion:
+            def on_text_changed(_):
+                """Auto-expand ~ and single directory matches."""
+                buf = session.default_buffer
+                text = buf.text
 
-    except ImportError:
+                # Don't auto-expand if completing
+                if buf.complete_state:
+                    return
+
+                # Case 1: Just typed ~ or $HOME (auto-append /)
+                if text in ('~', '$HOME'):
+                    buf.insert_text('/')
+                    return
+
+                # Case 2: Check if there's exactly one match and it's a directory
+                if text and not text.endswith('/') and '/' not in text[:-1]:
+                    try:
+                        completions = list(completer.get_completions(buf.document, None))
+
+                        # If exactly one completion and it's a directory, auto-expand it
+                        if len(completions) == 1:
+                            completion = completions[0]
+                            if completion.text.endswith('/'):
+                                # Replace buffer text with the completion
+                                buf.text = completion.text
+                                buf.cursor_position = len(completion.text)
+                    except Exception:
+                        pass
+
+            session.default_buffer.on_text_changed += on_text_changed
+
+        result = session.prompt()
+        return result.strip()
+
+    except ImportError as e:
         # Fallback to basic input if prompt_toolkit is not available
+        eprint(f"Warning: Advanced input features unavailable ({e})")
         eprint(prompt_text, end='')
         try:
-            return input()
+            return input().strip()
         except (EOFError, KeyboardInterrupt):
             eprint()
             fatal_error("Input cancelled by user")
@@ -871,14 +1400,17 @@ def main() -> None:
     if interactive_mode:
         # Interactive mode: validate each input immediately after entry
         if not client_id:
-            client_id = prompt_for_input("Enter GitHub App Client ID: ", enable_path_completion=False).strip()
-            try:
-                validate_client_id(client_id, args.force)
-            except ValidationError as e:
-                fatal_error(str(e))
+            client_id = prompt_for_input(
+                "Enter GitHub App Client ID: ",
+                enable_path_completion=False,
+                validator_func=lambda text: validate_client_id(text, args.force)
+            )
 
         if not pem_path_str:
-            pem_path_str = prompt_for_input("Enter path to private key PEM file: ", enable_path_completion=True).strip()
+            pem_path_str = prompt_for_input(
+                "Enter path to private key PEM file: ",
+                enable_path_completion=True
+            )
 
         # Expand and validate PEM path immediately
         try:
@@ -893,11 +1425,11 @@ def main() -> None:
 
         # Installation ID is only needed when not in JWT-only mode
         if not args.jwt and not installation_id:
-            installation_id = prompt_for_input("Enter Installation ID: ", enable_path_completion=False).strip()
-            try:
-                validate_installation_id(installation_id, args.force)
-            except ValidationError as e:
-                fatal_error(str(e))
+            installation_id = prompt_for_input(
+                "Enter Installation ID: ",
+                enable_path_completion=False,
+                validator_func=lambda text: validate_installation_id(text, args.force)
+            )
     else:
         # Command-line mode: collect all validation errors and report together
         # Expand path first
