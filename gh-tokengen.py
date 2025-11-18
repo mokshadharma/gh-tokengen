@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 import base64
 import hashlib
 import hmac
+import re
 
 __version__ = "1.0.0"
 
@@ -220,7 +221,7 @@ def validate_api_url(api_url: str) -> None:
 
     try:
         parsed = urlparse(api_url)
-        
+
         # Check if scheme is present and valid
         if not parsed.scheme:
             raise ValidationError(
@@ -228,14 +229,14 @@ def validate_api_url(api_url: str) -> None:
                 f"The URL must include a scheme (http:// or https://).\n"
                 f"Example: https://api.github.com"
             )
-        
+
         if parsed.scheme not in ('http', 'https'):
             raise ValidationError(
                 f"Invalid API URL scheme: '{parsed.scheme}'\n"
                 f"The URL must use either 'http://' or 'https://'.\n"
                 f"Example: https://api.github.com"
             )
-        
+
         # Check if netloc (domain) is present
         if not parsed.netloc:
             raise ValidationError(
@@ -243,7 +244,7 @@ def validate_api_url(api_url: str) -> None:
                 f"The URL must include a valid domain.\n"
                 f"Example: https://api.github.com"
             )
-            
+
     except ValueError as e:
         raise ValidationError(
             f"Invalid API URL format: '{api_url}'\n"
@@ -589,11 +590,84 @@ def get_installation_token(
     return token_data
 
 
-def prompt_for_input(prompt: str) -> str:
-    """Prompt user for input on stderr."""
-    eprint(prompt, end='')
+def detect_editing_mode_from_inputrc() -> str:
+    """
+    Detect editing mode (vi or emacs) from ~/.inputrc.
+
+    Returns:
+        'vi' or 'emacs' (defaults to 'emacs' if not specified or file doesn't exist)
+    """
+    inputrc_path = Path.home() / '.inputrc'
+
+    if not inputrc_path.exists():
+        return 'emacs'
+
     try:
-        return input()
+        content = inputrc_path.read_text()
+        # Look for "set editing-mode vi" or "set editing-mode emacs"
+        # Handle various whitespace and comment scenarios
+        for line in content.splitlines():
+            # Strip comments (everything after #)
+            line = line.split('#')[0].strip()
+
+            # Match "set editing-mode vi" or "set editing-mode emacs"
+            match = re.match(r'^set\s+editing-mode\s+(vi|emacs)\s*$', line, re.IGNORECASE)
+            if match:
+                return match.group(1).lower()
+    except Exception:
+        # If we can't read or parse the file, default to emacs
+        pass
+
+    return 'emacs'
+
+
+def prompt_for_input(prompt_text: str, enable_path_completion: bool = False) -> str:
+    """
+    Prompt user for input on stderr with rich line editing.
+
+    Args:
+        prompt_text: The prompt to display
+        enable_path_completion: Enable file path autocompletion
+
+    Returns:
+        User input string
+    """
+    try:
+        from prompt_toolkit import prompt, PromptSession
+        from prompt_toolkit.completion import PathCompleter
+        from prompt_toolkit.enums import EditingMode
+        from prompt_toolkit.output import create_output
+
+        # Detect editing mode from ~/.inputrc
+        mode_str = detect_editing_mode_from_inputrc()
+        editing_mode = EditingMode.VI if mode_str == 'vi' else EditingMode.EMACS
+
+        # Configure completer if path completion is enabled
+        completer = PathCompleter(expanduser=True) if enable_path_completion else None
+
+        # Create output to stderr
+        output = create_output(stdout=sys.stderr)
+
+        # Create a session with the desired settings
+        session = PromptSession(
+            editing_mode=editing_mode,
+            completer=completer,
+            complete_while_typing=False,  # Only complete on Tab
+            output=output,
+            enable_history_search=False
+        )
+
+        result = session.prompt(prompt_text)
+        return result
+
+    except ImportError:
+        # Fallback to basic input if prompt_toolkit is not available
+        eprint(prompt_text, end='')
+        try:
+            return input()
+        except (EOFError, KeyboardInterrupt):
+            eprint()
+            fatal_error("Input cancelled by user")
     except (EOFError, KeyboardInterrupt):
         eprint()
         fatal_error("Input cancelled by user")
@@ -767,7 +841,7 @@ Examples:
     # Validate mutually exclusive options
     if args.quiet and args.debug:
         parser.error("--quiet and --debug are mutually exclusive")
-    
+
     if args.jwt and args.installation_id:
         parser.error("--jwt and --installation-id are mutually exclusive")
 
@@ -797,21 +871,21 @@ def main() -> None:
     if interactive_mode:
         # Interactive mode: validate each input immediately after entry
         if not client_id:
-            client_id = prompt_for_input("Enter GitHub App Client ID: ").strip()
+            client_id = prompt_for_input("Enter GitHub App Client ID: ", enable_path_completion=False).strip()
             try:
                 validate_client_id(client_id, args.force)
             except ValidationError as e:
                 fatal_error(str(e))
 
         if not pem_path_str:
-            pem_path_str = prompt_for_input("Enter path to private key PEM file: ").strip()
-        
+            pem_path_str = prompt_for_input("Enter path to private key PEM file: ", enable_path_completion=True).strip()
+
         # Expand and validate PEM path immediately
         try:
             pem_path = expand_path(pem_path_str)
         except Exception as e:
             fatal_error(f"Invalid file path: {e}")
-        
+
         try:
             validate_pem_file(pem_path, args.force)
         except ValidationError as e:
@@ -819,7 +893,7 @@ def main() -> None:
 
         # Installation ID is only needed when not in JWT-only mode
         if not args.jwt and not installation_id:
-            installation_id = prompt_for_input("Enter Installation ID: ").strip()
+            installation_id = prompt_for_input("Enter Installation ID: ", enable_path_completion=False).strip()
             try:
                 validate_installation_id(installation_id, args.force)
             except ValidationError as e:
@@ -871,7 +945,7 @@ def main() -> None:
             expiry_seconds=args.jwt_expiry,
             debug=args.debug
         )
-        
+
         if args.debug:
             debug_print("Successfully generated JWT!", args.debug)
             debug_print(f"JWT: {mask_token(jwt_token)}", args.debug)
@@ -879,7 +953,7 @@ def main() -> None:
         elif not args.quiet:
             eprint(f"Generating JWT (expires in {args.jwt_expiry} seconds)...")
             eprint("Successfully generated JWT!\n")
-        
+
         output_jwt(jwt_token, issued_at, expires_at, args.output_format, args.quiet)
         return
 
@@ -887,7 +961,7 @@ def main() -> None:
     if not args.quiet and not args.debug:
         eprint(f"Generating JWT (expires in {args.jwt_expiry} seconds)...")
         eprint("Exchanging JWT for installation token...")
-    
+
     token_data = get_installation_token(
         client_id=client_id,
         pem_path=pem_path,
