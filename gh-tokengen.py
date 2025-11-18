@@ -730,7 +730,7 @@ class FuzzyPemCompleter:
             final_query = parts[-1]
             dir_parts = parts[:-1]
 
-            # Build the directory path
+            # Build the directory path - expand ~ and $HOME for internal use
             if text.startswith('/'):
                 current_dir = Path('/')
             elif text.startswith('~/') or text.startswith('$HOME/'):
@@ -779,21 +779,30 @@ class FuzzyPemCompleter:
                     display=completion_text
                 )
         else:
-            # No slash - match in base directory
-            candidates = self._get_candidates(self.base_dir, True)
-            matches = self._fuzzy_match(text, candidates)
+            # No slash - don't show completions for ~ alone
+            if text == '~':
+                # User typed just ~, don't show any completions
+                return
+            elif text.startswith('~') and len(text) > 1:
+                # User typed ~something (but no slash yet)
+                # Don't show completions until they type ~/
+                return
+            else:
+                # No slash, no ~ - match in base directory
+                candidates = self._get_candidates(self.base_dir, True)
+                matches = self._fuzzy_match(text, candidates)
 
-            for name, score, path in matches:
-                if path.is_dir():
-                    completion_text = name + '/'
-                else:
-                    completion_text = name
+                for name, score, path in matches:
+                    if path.is_dir():
+                        completion_text = name + '/'
+                    else:
+                        completion_text = name
 
-                yield Completion(
-                    completion_text,
-                    start_position=-len(text),
-                    display=completion_text
-                )
+                    yield Completion(
+                        completion_text,
+                        start_position=-len(text),
+                        display=completion_text
+                    )
 
     async def get_completions_async(self, document, complete_event):
         """
@@ -1142,6 +1151,7 @@ def prompt_for_input(
                 # Track if path started with ~ or $HOME for preserving it
                 starts_with_tilde = text.startswith('~/')
                 starts_with_home = text.startswith('$HOME/')
+                starts_with_bare_tilde = text == '~'
 
                 # Parse the path
                 if '/' in text:
@@ -1340,7 +1350,7 @@ def prompt_for_input(
         # Add auto-expansion handler for path completion
         if enable_path_completion:
             def on_text_changed(_):
-                """Auto-expand ~ and single directory matches."""
+                """Auto-expand single directory matches (but not ~)."""
                 buf = session.default_buffer
                 text = buf.text
 
@@ -1348,13 +1358,9 @@ def prompt_for_input(
                 if buf.complete_state:
                     return
 
-                # Case 1: Just typed ~ or $HOME (auto-append /)
-                if text in ('~', '$HOME'):
-                    buf.insert_text('/')
-                    return
-
-                # Case 2: Check if there's exactly one match and it's a directory
-                if text and not text.endswith('/') and '/' not in text[:-1]:
+                # Check if there's exactly one match and it's a directory
+                # (but don't auto-expand ~ or $HOME)
+                if text and not text.endswith('/') and '/' not in text[:-1] and text not in ('~', '$HOME'):
                     try:
                         completions = list(completer.get_completions(buf.document, None))
 
