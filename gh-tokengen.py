@@ -615,14 +615,16 @@ class FuzzyPemCompleter:
     Implements prompt_toolkit's Completer protocol via duck typing.
     """
 
-    def __init__(self, base_dir: Path):
+    def __init__(self, base_dir: Path, no_fuzzy: bool = False):
         """
         Initialize the fuzzy completer.
 
         Args:
             base_dir: Starting directory for path completion
+            no_fuzzy: If True, use prefix-only matching instead of fuzzy matching
         """
         self.base_dir = base_dir
+        self.no_fuzzy = no_fuzzy
         from rapidfuzz import fuzz, process
         self.fuzz = fuzz
         self.process = process
@@ -674,54 +676,74 @@ class FuzzyPemCompleter:
             # No query - return empty list (don't show completions until user types)
             return []
 
-        # Check if query characters appear in order in the candidate name (case-insensitive)
-        def has_ordered_chars(query_str: str, target_str: str) -> bool:
-            """Check if all characters in query appear in order in target."""
-            query_lower = query_str.lower()
-            target_lower = target_str.lower()
-            query_idx = 0
-            for char in target_lower:
-                if query_idx < len(query_lower) and char == query_lower[query_idx]:
-                    query_idx += 1
-            return query_idx == len(query_lower)
+        if self.no_fuzzy:
+            # Prefix-only matching with case sensitivity rules
+            # Case-sensitive if any uppercase in query, case-insensitive otherwise
+            query_has_upper = any(c.isupper() for c in query)
 
-        # Filter candidates to only those with characters in order
-        valid_candidates = [c for c in candidates if has_ordered_chars(query, c.name)]
-
-        if not valid_candidates:
-            return []
-
-        # Fuzzy match against basenames using QRatio for better sequential matching
-        names = [c.name for c in valid_candidates]
-        matches = self.process.extract(
-            query,
-            names,
-            scorer=self.fuzz.QRatio,
-            limit=None
-            # No score_cutoff - we already filtered by ordered characters
-        )
-
-        # Create lookup dict
-        name_to_path = {c.name: c for c in valid_candidates}
-
-        # Apply prefix bonus: boost score for filenames that start with the query
-        # This ensures prefix matches rank higher than fuzzy matches in the middle
-        adjusted_results = []
-        for name, score, _ in matches:
-            path = name_to_path[name]
-            # Add significant bonus if name starts with query (case-insensitive)
-            if name.lower().startswith(query.lower()):
-                adjusted_score = score + 50.0
+            if query_has_upper:
+                # Case-sensitive matching
+                matches = [c for c in candidates if c.name.startswith(query)]
             else:
-                adjusted_score = score
-            adjusted_results.append((name, adjusted_score, path))
+                # Case-insensitive matching
+                query_lower = query.lower()
+                matches = [c for c in candidates if c.name.lower().startswith(query_lower)]
 
-        all_results = adjusted_results
+            if not matches:
+                return []
+
+            # Assign score of 100 to all prefix matches (they're all equally good)
+            results = [(c.name, 100.0, c) for c in matches]
+        else:
+            # Fuzzy matching mode (original behavior)
+            # Check if query characters appear in order in the candidate name (case-insensitive)
+            def has_ordered_chars(query_str: str, target_str: str) -> bool:
+                """Check if all characters in query appear in order in target."""
+                query_lower = query_str.lower()
+                target_lower = target_str.lower()
+                query_idx = 0
+                for char in target_lower:
+                    if query_idx < len(query_lower) and char == query_lower[query_idx]:
+                        query_idx += 1
+                return query_idx == len(query_lower)
+
+            # Filter candidates to only those with characters in order
+            valid_candidates = [c for c in candidates if has_ordered_chars(query, c.name)]
+
+            if not valid_candidates:
+                return []
+
+            # Fuzzy match against basenames using QRatio for better sequential matching
+            names = [c.name for c in valid_candidates]
+            matches = self.process.extract(
+                query,
+                names,
+                scorer=self.fuzz.QRatio,
+                limit=None
+                # No score_cutoff - we already filtered by ordered characters
+            )
+
+            # Create lookup dict
+            name_to_path = {c.name: c for c in valid_candidates}
+
+            # Apply prefix bonus: boost score for filenames that start with the query
+            # This ensures prefix matches rank higher than fuzzy matches in the middle
+            adjusted_results = []
+            for name, score, _ in matches:
+                path = name_to_path[name]
+                # Add significant bonus if name starts with query (case-insensitive)
+                if name.lower().startswith(query.lower()):
+                    adjusted_score = score + 50.0
+                else:
+                    adjusted_score = score
+                adjusted_results.append((name, adjusted_score, path))
+
+            results = adjusted_results
 
         # Separate PEM files from other matches
-        pem_results = [(name, score, path) for name, score, path in all_results
+        pem_results = [(name, score, path) for name, score, path in results
                        if path.is_file() and path.suffix.lower() == '.pem']
-        other_results = [(name, score, path) for name, score, path in all_results
+        other_results = [(name, score, path) for name, score, path in results
                         if not (path.is_file() and path.suffix.lower() == '.pem')]
 
         # Sort each group by score (descending) then natural sort (case-insensitive)
@@ -912,7 +934,9 @@ def detect_editing_mode_from_inputrc() -> str:
 def prompt_for_input(
     prompt_text: str,
     enable_path_completion: bool = False,
-    validator_func: Optional[Callable[[str], None]] = None
+    validator_func: Optional[Callable[[str], None]] = None,
+    no_fuzzy: bool = False,
+    no_path_completion: bool = False
 ) -> str:
     """
     Prompt user for input on stderr with rich line editing.
@@ -921,10 +945,16 @@ def prompt_for_input(
         prompt_text: The prompt to display
         enable_path_completion: Enable file path autocompletion with fuzzy matching
         validator_func: Optional validation function for non-path inputs
+        no_fuzzy: Use prefix-only matching instead of fuzzy matching
+        no_path_completion: Disable path completion entirely and only validate
 
     Returns:
         User input string
     """
+    # If no_path_completion is True, it implies no_fuzzy as well
+    if no_path_completion:
+        no_fuzzy = True
+        enable_path_completion = False
     try:
         from prompt_toolkit import prompt, PromptSession
         from prompt_toolkit.completion import PathCompleter, Completer, Completion
@@ -948,7 +978,7 @@ def prompt_for_input(
         if enable_path_completion:
             # Use fuzzy PEM completer with current working directory
             base_dir = Path(os.getcwd())
-            completer = FuzzyPemCompleter(base_dir)
+            completer = FuzzyPemCompleter(base_dir, no_fuzzy=no_fuzzy)
         else:
             completer = None
 
@@ -980,8 +1010,8 @@ def prompt_for_input(
             def validate(self, document):
                 text = document.text.strip()
 
-                if enable_path_completion:
-                    # Path validation with fuzzy matching
+                if enable_path_completion or no_path_completion:
+                    # Path validation (with or without completion)
                     if not text:
                         state.error_message = ""
                         return
@@ -990,6 +1020,34 @@ def prompt_for_input(
                     try:
                         expanded = text.replace('$HOME', str(Path.home()))
                         path = Path(expanded).expanduser()
+
+                        # In no_path_completion mode, validate file exists and is readable immediately
+                        if no_path_completion:
+                            # Make path absolute if relative
+                            if not path.is_absolute():
+                                path = Path(os.getcwd()) / path
+
+                            # Check if exists
+                            if not path.exists():
+                                state.error_message = "file does not exist"
+                                raise PTValidationError(message="file does not exist")
+
+                            # Check if it's a regular file
+                            if not path.is_file():
+                                state.error_message = "not a regular file"
+                                raise PTValidationError(message="not a regular file")
+
+                            # Check if readable
+                            try:
+                                with open(path, 'r') as f:
+                                    pass
+                            except (PermissionError, OSError):
+                                state.error_message = "file is not readable"
+                                raise PTValidationError(message="file is not readable")
+
+                            # Valid file
+                            state.error_message = ""
+                            return
 
                         # Determine base directory
                         if text.startswith('/'):
@@ -1037,20 +1095,35 @@ def prompt_for_input(
 
                                 # If no exact match, try fuzzy match using ordered characters
                                 if not matched:
-                                    def has_ordered_chars(query_str: str, target_str: str) -> bool:
-                                        query_lower = query_str.lower()
-                                        target_lower = target_str.lower()
-                                        query_idx = 0
-                                        for char in target_lower:
-                                            if query_idx < len(query_lower) and char == query_lower[query_idx]:
-                                                query_idx += 1
-                                        return query_idx == len(query_lower)
+                                    if no_fuzzy:
+                                        # Prefix-only matching with case rules
+                                        part_has_upper = any(c.isupper() for c in part)
+                                        if part_has_upper:
+                                            # Case-sensitive
+                                            prefix_matches = [s for s in subdirs if s.name.startswith(part)]
+                                        else:
+                                            # Case-insensitive
+                                            part_lower = part.lower()
+                                            prefix_matches = [s for s in subdirs if s.name.lower().startswith(part_lower)]
 
-                                    # Find subdirs that match
-                                    fuzzy_matches = [s for s in subdirs if has_ordered_chars(part, s.name)]
-                                    if fuzzy_matches:
-                                        # Use the first fuzzy match (could score and sort, but keep it simple)
-                                        matched = fuzzy_matches[0]
+                                        if prefix_matches:
+                                            matched = prefix_matches[0]
+                                    else:
+                                        # Fuzzy matching
+                                        def has_ordered_chars(query_str: str, target_str: str) -> bool:
+                                            query_lower = query_str.lower()
+                                            target_lower = target_str.lower()
+                                            query_idx = 0
+                                            for char in target_lower:
+                                                if query_idx < len(query_lower) and char == query_lower[query_idx]:
+                                                    query_idx += 1
+                                            return query_idx == len(query_lower)
+
+                                        # Find subdirs that match
+                                        fuzzy_matches = [s for s in subdirs if has_ordered_chars(part, s.name)]
+                                        if fuzzy_matches:
+                                            # Use the first fuzzy match (could score and sort, but keep it simple)
+                                            matched = fuzzy_matches[0]
 
                                 if matched:
                                     current_dir = matched
@@ -1081,17 +1154,27 @@ def prompt_for_input(
                                     state.error_message = "no match"
                                     raise PTValidationError(message="no match")
 
-                                # Check if query characters appear in order in any candidate
-                                def has_ordered_chars(query_str: str, target_str: str) -> bool:
-                                    query_lower = query_str.lower()
-                                    target_lower = target_str.lower()
-                                    query_idx = 0
-                                    for char in target_lower:
-                                        if query_idx < len(query_lower) and char == query_lower[query_idx]:
-                                            query_idx += 1
-                                    return query_idx == len(query_lower)
+                                # Check if any candidate matches
+                                if no_fuzzy:
+                                    # Prefix-only matching
+                                    final_has_upper = any(c.isupper() for c in final_query)
+                                    if final_has_upper:
+                                        has_match = any(c.name.startswith(final_query) for c in candidates)
+                                    else:
+                                        final_lower = final_query.lower()
+                                        has_match = any(c.name.lower().startswith(final_lower) for c in candidates)
+                                else:
+                                    # Fuzzy matching
+                                    def has_ordered_chars(query_str: str, target_str: str) -> bool:
+                                        query_lower = query_str.lower()
+                                        target_lower = target_str.lower()
+                                        query_idx = 0
+                                        for char in target_lower:
+                                            if query_idx < len(query_lower) and char == query_lower[query_idx]:
+                                                query_idx += 1
+                                        return query_idx == len(query_lower)
 
-                                has_match = any(has_ordered_chars(final_query, c.name) for c in candidates)
+                                    has_match = any(has_ordered_chars(final_query, c.name) for c in candidates)
 
                                 if not has_match:
                                     state.error_message = "no match"
@@ -1120,17 +1203,27 @@ def prompt_for_input(
                                 state.error_message = "no match"
                                 raise PTValidationError(message="no match")
 
-                            # Check if query characters appear in order in any candidate
-                            def has_ordered_chars(query_str: str, target_str: str) -> bool:
-                                query_lower = query_str.lower()
-                                target_lower = target_str.lower()
-                                query_idx = 0
-                                for char in target_lower:
-                                    if query_idx < len(query_lower) and char == query_lower[query_idx]:
-                                        query_idx += 1
-                                return query_idx == len(query_lower)
+                            # Check if any candidate matches
+                            if no_fuzzy:
+                                # Prefix-only matching
+                                text_has_upper = any(c.isupper() for c in text)
+                                if text_has_upper:
+                                    has_match = any(c.name.startswith(text) for c in candidates)
+                                else:
+                                    text_lower = text.lower()
+                                    has_match = any(c.name.lower().startswith(text_lower) for c in candidates)
+                            else:
+                                # Fuzzy matching
+                                def has_ordered_chars(query_str: str, target_str: str) -> bool:
+                                    query_lower = query_str.lower()
+                                    target_lower = target_str.lower()
+                                    query_idx = 0
+                                    for char in target_lower:
+                                        if query_idx < len(query_lower) and char == query_lower[query_idx]:
+                                            query_idx += 1
+                                    return query_idx == len(query_lower)
 
-                            has_match = any(has_ordered_chars(text, c.name) for c in candidates)
+                                has_match = any(has_ordered_chars(text, c.name) for c in candidates)
 
                             if not has_match:
                                 state.error_message = "no match"
@@ -1240,7 +1333,7 @@ def prompt_for_input(
                 return None
 
             try:
-                # Helper for ordered char matching
+                # Helper for matching based on mode
                 def has_ordered_chars(query_str: str, target_str: str) -> bool:
                     query_lower = query_str.lower()
                     target_lower = target_str.lower()
@@ -1249,6 +1342,19 @@ def prompt_for_input(
                         if query_idx < len(query_lower) and char == query_lower[query_idx]:
                             query_idx += 1
                     return query_idx == len(query_lower)
+
+                def matches_query(query_str: str, target_str: str) -> bool:
+                    """Check if target matches query based on current mode."""
+                    if no_fuzzy:
+                        # Prefix-only matching
+                        query_has_upper = any(c.isupper() for c in query_str)
+                        if query_has_upper:
+                            return target_str.startswith(query_str)
+                        else:
+                            return target_str.lower().startswith(query_str.lower())
+                    else:
+                        # Fuzzy matching
+                        return has_ordered_chars(query_str, target_str)
 
                 # Track if path started with ~ or $HOME for preserving it
                 starts_with_tilde = text.startswith('~/')
@@ -1301,17 +1407,21 @@ def prompt_for_input(
                                 matched = candidate
                                 break
 
-                        # If no exact match, try fuzzy matching
+                        # If no exact match, try matching based on mode
                         if not matched:
-                            fuzzy_matches = [c for c in candidates if has_ordered_chars(part, c.name)]
-                            if fuzzy_matches:
-                                # Use the best match (first one after sorting by score)
-                                from rapidfuzz import fuzz, process
-                                names = [c.name for c in fuzzy_matches]
-                                matches = process.extract(part, names, scorer=fuzz.QRatio, limit=1)
-                                if matches:
-                                    best_name = matches[0][0]
-                                    matched = next(c for c in fuzzy_matches if c.name == best_name)
+                            matching_candidates = [c for c in candidates if matches_query(part, c.name)]
+                            if matching_candidates:
+                                if no_fuzzy:
+                                    # Prefix mode: use first match
+                                    matched = matching_candidates[0]
+                                else:
+                                    # Fuzzy mode: use the best match (first one after sorting by score)
+                                    from rapidfuzz import fuzz, process
+                                    names = [c.name for c in matching_candidates]
+                                    matches = process.extract(part, names, scorer=fuzz.QRatio, limit=1)
+                                    if matches:
+                                        best_name = matches[0][0]
+                                        matched = next(c for c in matching_candidates if c.name == best_name)
 
                         if matched:
                             current_dir = matched
@@ -1337,16 +1447,22 @@ def prompt_for_input(
                         if candidate.name == text:
                             return (text, str(candidate))
 
-                    # Try fuzzy match
-                    fuzzy_matches = [c for c in candidates if has_ordered_chars(text, c.name)]
-                    if fuzzy_matches:
-                        from rapidfuzz import fuzz, process
-                        names = [c.name for c in fuzzy_matches]
-                        matches = process.extract(text, names, scorer=fuzz.QRatio, limit=1)
-                        if matches:
-                            best_name = matches[0][0]
-                            matched = next(c for c in fuzzy_matches if c.name == best_name)
+                    # Try matching based on mode
+                    matching_candidates = [c for c in candidates if matches_query(text, c.name)]
+                    if matching_candidates:
+                        if no_fuzzy:
+                            # Prefix mode: use first match
+                            matched = matching_candidates[0]
                             return (matched.name, str(matched))
+                        else:
+                            # Fuzzy mode: use best match
+                            from rapidfuzz import fuzz, process
+                            names = [c.name for c in matching_candidates]
+                            matches = process.extract(text, names, scorer=fuzz.QRatio, limit=1)
+                            if matches:
+                                best_name = matches[0][0]
+                                matched = next(c for c in matching_candidates if c.name == best_name)
+                                return (matched.name, str(matched))
 
                     return None
             except Exception:
@@ -1358,22 +1474,26 @@ def prompt_for_input(
             buf = event.app.current_buffer
             text = buf.text.strip()
 
-            if enable_path_completion:
-                # For path input, resolve fuzzy path to actual path
+            if enable_path_completion or no_path_completion:
+                # For path input, resolve fuzzy path to actual path (or validate directly)
                 if not text:
                     return
 
-                # Try to resolve the fuzzy path
-                result = resolve_fuzzy_path(text)
-                if result:
-                    unexpanded_path, expanded_path = result
-                    # Use unexpanded path for display, expanded for validation
-                    buf.text = unexpanded_path
-                    buf.cursor_position = len(unexpanded_path)
-                    text = unexpanded_path
-                    validation_path = expanded_path
-                else:
+                if no_path_completion:
+                    # No completion mode: just validate the path as-is
                     validation_path = text
+                else:
+                    # Try to resolve the fuzzy path
+                    result = resolve_fuzzy_path(text)
+                    if result:
+                        unexpanded_path, expanded_path = result
+                        # Use unexpanded path for display, expanded for validation
+                        buf.text = unexpanded_path
+                        buf.cursor_position = len(unexpanded_path)
+                        text = unexpanded_path
+                        validation_path = expanded_path
+                    else:
+                        validation_path = text
 
                 try:
                     path = Path(validation_path)
@@ -1653,6 +1773,16 @@ Examples:
         help='Generate and output only the JWT (do not exchange for installation token)'
     )
     parser.add_argument(
+        '--no-fuzzy',
+        action='store_true',
+        help='Disable fuzzy matching; use prefix-only matching for path completion'
+    )
+    parser.add_argument(
+        '--no-path-completion',
+        action='store_true',
+        help='Disable path completion entirely; only validate file after input'
+    )
+    parser.add_argument(
         '--version',
         action='version',
         version=f'%(prog)s {__version__}'
@@ -1700,9 +1830,15 @@ def main() -> None:
             )
 
         if not pem_path_str:
+            # Determine flags: --no-path-completion implies --no-fuzzy
+            use_path_completion = not args.no_path_completion
+            use_fuzzy = not (args.no_fuzzy or args.no_path_completion)
+
             pem_path_str = prompt_for_input(
                 "Enter path to private key PEM file: ",
-                enable_path_completion=True
+                enable_path_completion=use_path_completion,
+                no_fuzzy=not use_fuzzy,
+                no_path_completion=args.no_path_completion
             )
 
         # Expand and validate PEM path immediately (but keep original for display)
