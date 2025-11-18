@@ -703,7 +703,20 @@ class FuzzyPemCompleter:
 
         # Create lookup dict
         name_to_path = {c.name: c for c in valid_candidates}
-        all_results = [(name, score, name_to_path[name]) for name, score, _ in matches]
+
+        # Apply prefix bonus: boost score for filenames that start with the query
+        # This ensures prefix matches rank higher than fuzzy matches in the middle
+        adjusted_results = []
+        for name, score, _ in matches:
+            path = name_to_path[name]
+            # Add significant bonus if name starts with query (case-insensitive)
+            if name.lower().startswith(query.lower()):
+                adjusted_score = score + 50.0
+            else:
+                adjusted_score = score
+            adjusted_results.append((name, adjusted_score, path))
+
+        all_results = adjusted_results
 
         # Separate PEM files from other matches
         pem_results = [(name, score, path) for name, score, path in all_results
