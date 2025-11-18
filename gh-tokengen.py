@@ -1496,7 +1496,9 @@ def prompt_for_input(
                         validation_path = text
 
                 try:
-                    path = Path(validation_path)
+                    # Expand ~ and $HOME first
+                    expanded = validation_path.replace('$HOME', str(Path.home()))
+                    path = Path(expanded).expanduser()
 
                     # Resolve relative to current directory if needed
                     if not path.is_absolute():
@@ -1509,7 +1511,7 @@ def prompt_for_input(
 
                     # Check if it's a directory
                     if path.is_dir():
-                        state.error_message = "not a valid *.pem file name"
+                        state.error_message = "this is a directory, not a *.pem file"
                         return
 
                     # Must be a .pem file
@@ -1565,7 +1567,7 @@ def prompt_for_input(
             validator=validator if enable_path_completion else None,
             validate_while_typing=enable_path_completion,
             key_bindings=kb,
-            bottom_toolbar=bottom_toolbar if enable_path_completion or validator_func else None,
+            bottom_toolbar=bottom_toolbar if enable_path_completion or no_path_completion or validator_func else None,
             reserve_space_for_menu=8  # Reserve space for completion menu
         )
 
