@@ -673,18 +673,36 @@ class FuzzyPemCompleter:
             # No query - return all candidates sorted naturally
             results = [(c.name, 100.0, c) for c in candidates]
         else:
-            # Fuzzy match against basenames
-            names = [c.name for c in candidates]
+            # Check if query characters appear in order in the candidate name (case-insensitive)
+            def has_ordered_chars(query_str: str, target_str: str) -> bool:
+                """Check if all characters in query appear in order in target."""
+                query_lower = query_str.lower()
+                target_lower = target_str.lower()
+                query_idx = 0
+                for char in target_lower:
+                    if query_idx < len(query_lower) and char == query_lower[query_idx]:
+                        query_idx += 1
+                return query_idx == len(query_lower)
+
+            # Filter candidates to only those with characters in order
+            valid_candidates = [c for c in candidates if has_ordered_chars(query, c.name)]
+
+            if not valid_candidates:
+                return []
+
+            # Fuzzy match against basenames using QRatio for better sequential matching
+            names = [c.name for c in valid_candidates]
             matches = self.process.extract(
                 query,
                 names,
-                scorer=self.fuzz.WRatio,
+                scorer=self.fuzz.QRatio,
                 limit=None
+                # No score_cutoff - we already filtered by ordered characters
             )
 
             # Create lookup dict
-            name_to_path = {c.name: c for c in candidates}
-            results = [(name, score, name_to_path[name]) for name, score, _ in matches if score > 0]
+            name_to_path = {c.name: c for c in valid_candidates}
+            results = [(name, score, name_to_path[name]) for name, score, _ in matches]
 
         # Sort by score (descending) then natural sort
         results.sort(key=lambda x: (-x[1], natural_sort_key(x[0])))
@@ -716,15 +734,20 @@ class FuzzyPemCompleter:
             if text.startswith('/'):
                 current_dir = Path('/')
             elif text.startswith('~/') or text.startswith('$HOME/'):
-                current_dir = self._expand_path(text.split('/')[0])
+                current_dir = Path.home()
             else:
                 current_dir = self.base_dir
 
-            # Navigate through directory parts
+            # Navigate through directory parts (but not the final query part)
             for i, part in enumerate(dir_parts):
-                if not part or (i == 0 and part in ('~', '$HOME', '')):
+                # Skip empty parts and special markers at the start
+                if not part:
+                    continue
+                if i == 0 and part in ('~', '$HOME'):
+                    # Already handled above by setting current_dir to home
                     continue
 
+                # This part is an intermediate directory to navigate through
                 # Get subdirectories and fuzzy match
                 subdirs = [p for p in self._get_candidates(current_dir, False)]
                 if not subdirs:
@@ -738,6 +761,7 @@ class FuzzyPemCompleter:
                     return
 
             # Get candidates for final segment (includes .pem files)
+            # This is where we search for the final_query
             candidates = self._get_candidates(current_dir, True)
             matches = self._fuzzy_match(final_query, candidates)
 
@@ -943,10 +967,27 @@ def prompt_for_input(
                                         matched = subdir
                                         break
 
+                                # If no exact match, try fuzzy match using ordered characters
+                                if not matched:
+                                    def has_ordered_chars(query_str: str, target_str: str) -> bool:
+                                        query_lower = query_str.lower()
+                                        target_lower = target_str.lower()
+                                        query_idx = 0
+                                        for char in target_lower:
+                                            if query_idx < len(query_lower) and char == query_lower[query_idx]:
+                                                query_idx += 1
+                                        return query_idx == len(query_lower)
+
+                                    # Find subdirs that match
+                                    fuzzy_matches = [s for s in subdirs if has_ordered_chars(part, s.name)]
+                                    if fuzzy_matches:
+                                        # Use the first fuzzy match (could score and sort, but keep it simple)
+                                        matched = fuzzy_matches[0]
+
                                 if matched:
                                     current_dir = matched
                                 else:
-                                    # No exact match - this is an error if final_query exists
+                                    # No match at all - this is an error if final_query exists
                                     if final_query:
                                         state.error_message = "no match"
                                         raise PTValidationError(message="no match")
@@ -972,16 +1013,19 @@ def prompt_for_input(
                                     state.error_message = "no match"
                                     raise PTValidationError(message="no match")
 
-                                # Check for fuzzy matches
-                                from rapidfuzz import fuzz, process
-                                matches = process.extract(
-                                    final_query,
-                                    [c.name for c in candidates],
-                                    scorer=fuzz.WRatio,
-                                    limit=1
-                                )
+                                # Check if query characters appear in order in any candidate
+                                def has_ordered_chars(query_str: str, target_str: str) -> bool:
+                                    query_lower = query_str.lower()
+                                    target_lower = target_str.lower()
+                                    query_idx = 0
+                                    for char in target_lower:
+                                        if query_idx < len(query_lower) and char == query_lower[query_idx]:
+                                            query_idx += 1
+                                    return query_idx == len(query_lower)
 
-                                if not matches or matches[0][1] == 0:
+                                has_match = any(has_ordered_chars(final_query, c.name) for c in candidates)
+
+                                if not has_match:
                                     state.error_message = "no match"
                                     raise PTValidationError(message="no match")
                         else:
@@ -1008,16 +1052,19 @@ def prompt_for_input(
                                 state.error_message = "no match"
                                 raise PTValidationError(message="no match")
 
-                            # Check for fuzzy matches
-                            from rapidfuzz import fuzz, process
-                            matches = process.extract(
-                                text,
-                                [c.name for c in candidates],
-                                scorer=fuzz.WRatio,
-                                limit=1
-                            )
+                            # Check if query characters appear in order in any candidate
+                            def has_ordered_chars(query_str: str, target_str: str) -> bool:
+                                query_lower = query_str.lower()
+                                target_lower = target_str.lower()
+                                query_idx = 0
+                                for char in target_lower:
+                                    if query_idx < len(query_lower) and char == query_lower[query_idx]:
+                                        query_idx += 1
+                                return query_idx == len(query_lower)
 
-                            if not matches or matches[0][1] == 0:
+                            has_match = any(has_ordered_chars(text, c.name) for c in candidates)
+
+                            if not has_match:
                                 state.error_message = "no match"
                                 raise PTValidationError(message="no match")
 
@@ -1072,6 +1119,114 @@ def prompt_for_input(
                 if enable_path_completion and not buf.complete_state:
                     buf.start_completion(select_first=False)
 
+        def resolve_fuzzy_path(text: str) -> Optional[str]:
+            """Resolve a fuzzy path to an actual full path."""
+            if not text or not enable_path_completion:
+                return None
+
+            try:
+                # Helper for ordered char matching
+                def has_ordered_chars(query_str: str, target_str: str) -> bool:
+                    query_lower = query_str.lower()
+                    target_lower = target_str.lower()
+                    query_idx = 0
+                    for char in target_lower:
+                        if query_idx < len(query_lower) and char == query_lower[query_idx]:
+                            query_idx += 1
+                    return query_idx == len(query_lower)
+
+                # Parse the path
+                if '/' in text:
+                    parts = text.split('/')
+
+                    # Determine base directory
+                    if text.startswith('/'):
+                        current_dir = Path('/')
+                        start_idx = 1
+                    elif text.startswith('~/') or text.startswith('$HOME/'):
+                        current_dir = Path.home()
+                        start_idx = 1
+                    else:
+                        current_dir = Path(os.getcwd())
+                        start_idx = 0
+
+                    # Navigate through each part
+                    for i in range(start_idx, len(parts)):
+                        part = parts[i]
+                        if not part or part in ('~', '$HOME'):
+                            continue
+
+                        # Get candidates in current directory
+                        is_last = (i == len(parts) - 1)
+                        candidates = []
+
+                        if current_dir.exists():
+                            for item in current_dir.iterdir():
+                                if is_last:
+                                    # Last segment: include .pem files and directories
+                                    if item.is_dir() or (item.is_file() and item.suffix == '.pem'):
+                                        candidates.append(item)
+                                else:
+                                    # Intermediate: only directories
+                                    if item.is_dir():
+                                        candidates.append(item)
+
+                        # Try exact match first
+                        matched = None
+                        for candidate in candidates:
+                            if candidate.name == part:
+                                matched = candidate
+                                break
+
+                        # If no exact match, try fuzzy matching
+                        if not matched:
+                            fuzzy_matches = [c for c in candidates if has_ordered_chars(part, c.name)]
+                            if fuzzy_matches:
+                                # Use the best match (first one after sorting by score)
+                                from rapidfuzz import fuzz, process
+                                names = [c.name for c in fuzzy_matches]
+                                matches = process.extract(part, names, scorer=fuzz.QRatio, limit=1)
+                                if matches:
+                                    best_name = matches[0][0]
+                                    matched = next(c for c in fuzzy_matches if c.name == best_name)
+
+                        if matched:
+                            current_dir = matched
+                        else:
+                            return None
+
+                    # Return the resolved path as a string
+                    return str(current_dir)
+                else:
+                    # No slash - match in current directory
+                    base_dir = Path(os.getcwd())
+                    candidates = []
+
+                    if base_dir.exists():
+                        for item in base_dir.iterdir():
+                            if item.is_dir() or (item.is_file() and item.suffix == '.pem'):
+                                candidates.append(item)
+
+                    # Try exact match first
+                    for candidate in candidates:
+                        if candidate.name == text:
+                            return str(candidate)
+
+                    # Try fuzzy match
+                    fuzzy_matches = [c for c in candidates if has_ordered_chars(text, c.name)]
+                    if fuzzy_matches:
+                        from rapidfuzz import fuzz, process
+                        names = [c.name for c in fuzzy_matches]
+                        matches = process.extract(text, names, scorer=fuzz.QRatio, limit=1)
+                        if matches:
+                            best_name = matches[0][0]
+                            matched = next(c for c in fuzzy_matches if c.name == best_name)
+                            return str(matched)
+
+                    return None
+            except Exception:
+                return None
+
         @kb.add(Keys.ControlM)  # Enter key
         def handle_enter(event):
             """Handle Enter key - validate before accepting."""
@@ -1079,29 +1234,42 @@ def prompt_for_input(
             text = buf.text.strip()
 
             if enable_path_completion:
-                # For path input, check if it's a valid .pem file
+                # For path input, resolve fuzzy path to actual path
                 if not text:
                     return
 
-                try:
-                    expanded = text.replace('$HOME', str(Path.home()))
-                    path = Path(expanded).expanduser()
+                # Try to resolve the fuzzy path
+                resolved = resolve_fuzzy_path(text)
+                if resolved:
+                    # Replace buffer text with resolved path
+                    buf.text = resolved
+                    buf.cursor_position = len(resolved)
+                    text = resolved
 
-                    # Resolve relative to current directory
+                try:
+                    path = Path(text)
+
+                    # Resolve relative to current directory if needed
                     if not path.is_absolute():
                         path = Path(os.getcwd()) / path
 
-                    # Check if it's a directory
-                    if path.exists() and path.is_dir():
+                    # Check if it exists
+                    if not path.exists():
                         state.error_message = "not a valid *.pem file name"
                         return
 
-                    # Must end with .pem or resolve to a .pem file
+                    # Check if it's a directory
+                    if path.is_dir():
+                        state.error_message = "not a valid *.pem file name"
+                        return
+
+                    # Must be a .pem file
                     if path.suffix != '.pem':
                         state.error_message = "not a valid *.pem file name"
                         return
 
                 except Exception:
+                    state.error_message = "not a valid *.pem file name"
                     return
             else:
                 # For non-path inputs, validate using custom validator
