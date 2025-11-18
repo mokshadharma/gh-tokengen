@@ -1119,8 +1119,12 @@ def prompt_for_input(
                 if enable_path_completion and not buf.complete_state:
                     buf.start_completion(select_first=False)
 
-        def resolve_fuzzy_path(text: str) -> Optional[str]:
-            """Resolve a fuzzy path to an actual full path."""
+        def resolve_fuzzy_path(text: str) -> Optional[tuple[str, str]]:
+            """Resolve a fuzzy path to an actual full path.
+
+            Returns:
+                Tuple of (unexpanded_path, expanded_path) or None if no match
+            """
             if not text or not enable_path_completion:
                 return None
 
@@ -1135,6 +1139,10 @@ def prompt_for_input(
                             query_idx += 1
                     return query_idx == len(query_lower)
 
+                # Track if path started with ~ or $HOME for preserving it
+                starts_with_tilde = text.startswith('~/')
+                starts_with_home = text.startswith('$HOME/')
+
                 # Parse the path
                 if '/' in text:
                     parts = text.split('/')
@@ -1143,12 +1151,15 @@ def prompt_for_input(
                     if text.startswith('/'):
                         current_dir = Path('/')
                         start_idx = 1
-                    elif text.startswith('~/') or text.startswith('$HOME/'):
+                        unexpanded_parts = ['']
+                    elif starts_with_tilde or starts_with_home:
                         current_dir = Path.home()
                         start_idx = 1
+                        unexpanded_parts = ['~' if starts_with_tilde else '$HOME']
                     else:
                         current_dir = Path(os.getcwd())
                         start_idx = 0
+                        unexpanded_parts = []
 
                     # Navigate through each part
                     for i in range(start_idx, len(parts)):
@@ -1192,11 +1203,13 @@ def prompt_for_input(
 
                         if matched:
                             current_dir = matched
+                            unexpanded_parts.append(matched.name)
                         else:
                             return None
 
-                    # Return the resolved path as a string
-                    return str(current_dir)
+                    # Return both unexpanded and expanded paths
+                    unexpanded = '/'.join(unexpanded_parts)
+                    return (unexpanded, str(current_dir))
                 else:
                     # No slash - match in current directory
                     base_dir = Path(os.getcwd())
@@ -1210,7 +1223,7 @@ def prompt_for_input(
                     # Try exact match first
                     for candidate in candidates:
                         if candidate.name == text:
-                            return str(candidate)
+                            return (text, str(candidate))
 
                     # Try fuzzy match
                     fuzzy_matches = [c for c in candidates if has_ordered_chars(text, c.name)]
@@ -1221,7 +1234,7 @@ def prompt_for_input(
                         if matches:
                             best_name = matches[0][0]
                             matched = next(c for c in fuzzy_matches if c.name == best_name)
-                            return str(matched)
+                            return (matched.name, str(matched))
 
                     return None
             except Exception:
@@ -1239,15 +1252,19 @@ def prompt_for_input(
                     return
 
                 # Try to resolve the fuzzy path
-                resolved = resolve_fuzzy_path(text)
-                if resolved:
-                    # Replace buffer text with resolved path
-                    buf.text = resolved
-                    buf.cursor_position = len(resolved)
-                    text = resolved
+                result = resolve_fuzzy_path(text)
+                if result:
+                    unexpanded_path, expanded_path = result
+                    # Use unexpanded path for display, expanded for validation
+                    buf.text = unexpanded_path
+                    buf.cursor_position = len(unexpanded_path)
+                    text = unexpanded_path
+                    validation_path = expanded_path
+                else:
+                    validation_path = text
 
                 try:
-                    path = Path(text)
+                    path = Path(validation_path)
 
                     # Resolve relative to current directory if needed
                     if not path.is_absolute():
@@ -1580,7 +1597,7 @@ def main() -> None:
                 enable_path_completion=True
             )
 
-        # Expand and validate PEM path immediately
+        # Expand and validate PEM path immediately (but keep original for display)
         try:
             pem_path = expand_path(pem_path_str)
         except Exception as e:
@@ -1626,14 +1643,14 @@ def main() -> None:
                     eprint()  # Blank line between errors
             sys.exit(1)
 
-    # Show progress unless in quiet mode
+    # Show progress unless in quiet mode (use unexpanded path for display)
     if not args.quiet:
-        eprint(f"Reading private key from: {pem_path}")
+        eprint(f"Reading private key from: {pem_path_str}")
 
     debug_print(f"Client ID: {client_id}", args.debug)
     if not args.jwt:
         debug_print(f"Installation ID: {installation_id}", args.debug)
-    debug_print(f"PEM path: {pem_path}", args.debug)
+    debug_print(f"PEM path: {pem_path_str}", args.debug)
     debug_print(f"API URL: {args.api_url}", args.debug)
     debug_print(f"User-Agent: {args.user_agent}", args.debug)
 
