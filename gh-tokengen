@@ -9,7 +9,15 @@
 set -euo pipefail
 
 # Resolve the directory where this script actually resides (following symlinks)
-SCRIPT_DIR="$(cd -P "$(dirname "$0")" && pwd)"
+# First, resolve the actual script path if this is a symlink
+SCRIPT_PATH="$0"
+while [ -L "$SCRIPT_PATH" ]; do
+    SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
+    SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+    # If readlink gave us a relative path, make it absolute
+    [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
 
 # Define paths relative to the script's actual location
 VENV_ACTIVATE="$SCRIPT_DIR/.venv/bin/activate"
