@@ -61,35 +61,52 @@ def expand_path(path_str: str) -> Path:
 
 def validate_pem_file(pem_path: Path, force: bool) -> None:
     """
-    Validate that the PEM file exists and appears to be a valid private key.
+    Validate that the PEM file exists and is readable.
+    Existence and readability checks always run, even with --force.
 
     Args:
         pem_path: Path to the PEM file
-        force: Skip validation if True
+        force: Skip format validation if True (but still check existence/readability)
 
     Raises:
         ValidationError: If validation fails
     """
-    if force:
-        debug_print(f"Skipping validation (--force enabled)", True)
-        return
-
+    # Always check existence (even with --force)
     if not pem_path.exists():
-        raise ValidationError(f"PEM file not found: {pem_path}")
+        raise ValidationError(
+            f"Cannot find the PEM file at '{pem_path}'.\n"
+            f"Please check that the path is correct and the file exists."
+        )
 
     if not pem_path.is_file():
-        raise ValidationError(f"PEM path is not a file: {pem_path}")
+        raise ValidationError(
+            f"The path '{pem_path}' exists but is not a file.\n"
+            f"Please provide the path to a PEM file, not a directory."
+        )
 
-    if not pem_path.stat().st_mode & 0o400:
-        raise ValidationError(f"PEM file is not readable: {pem_path}")
-
-    # Basic format validation
+    # Always check readability (even with --force)
     try:
+        # Actually attempt to read the file to verify permissions
         content = pem_path.read_text()
-        if "BEGIN" not in content or "PRIVATE KEY" not in content:
-            raise ValidationError(f"File does not appear to be a valid private key: {pem_path}")
+    except PermissionError:
+        raise ValidationError(
+            f"Permission denied when trying to read '{pem_path}'.\n"
+            f"Please check that you have read permissions for this file."
+        )
     except Exception as e:
-        raise ValidationError(f"Failed to read PEM file: {e}")
+        raise ValidationError(
+            f"Failed to read PEM file '{pem_path}': {e}\n"
+            f"Please ensure the file is accessible and not corrupted."
+        )
+
+    # Basic format validation (can be skipped with --force)
+    if not force:
+        if "BEGIN" not in content or "PRIVATE KEY" not in content:
+            raise ValidationError(
+                f"The file '{pem_path}' does not appear to be a valid private key.\n"
+                f"Expected to find 'BEGIN' and 'PRIVATE KEY' markers in the file.\n"
+                f"Please provide a valid PEM-formatted private key file."
+            )
 
 
 def validate_client_id(client_id: str, force: bool) -> None:
@@ -107,10 +124,29 @@ def validate_client_id(client_id: str, force: bool) -> None:
         return
 
     if not client_id:
-        raise ValidationError("Client ID cannot be empty")
+        raise ValidationError(
+            "Client ID cannot be empty.\n"
+            "Please enter your GitHub App Client ID (e.g., Iv1.1234567890abcdef)."
+        )
 
-    if not client_id.isalnum():
-        raise ValidationError(f"Client ID must contain only alphanumeric characters and no whitespace: {client_id}")
+    if not client_id.strip():
+        raise ValidationError(
+            "Client ID contains only whitespace.\n"
+            "Please enter a valid GitHub App Client ID (e.g., Iv1.1234567890abcdef)."
+        )
+
+    if client_id != client_id.strip():
+        raise ValidationError(
+            f"Client ID contains leading or trailing whitespace: '{client_id}'\n"
+            "Please remove any extra spaces."
+        )
+
+    if not client_id.replace('.', '').isalnum():
+        raise ValidationError(
+            f"Client ID contains invalid characters: '{client_id}'\n"
+            "GitHub App Client IDs should contain only alphanumeric characters and dots.\n"
+            "Example: Iv1.1234567890abcdef"
+        )
 
 
 def validate_installation_id(installation_id: str, force: bool) -> None:
@@ -128,10 +164,29 @@ def validate_installation_id(installation_id: str, force: bool) -> None:
         return
 
     if not installation_id:
-        raise ValidationError("Installation ID cannot be empty")
+        raise ValidationError(
+            "Installation ID cannot be empty.\n"
+            "Please enter the numeric Installation ID for your GitHub App."
+        )
+
+    if not installation_id.strip():
+        raise ValidationError(
+            "Installation ID contains only whitespace.\n"
+            "Please enter a valid numeric Installation ID (e.g., 12345678)."
+        )
+
+    if installation_id != installation_id.strip():
+        raise ValidationError(
+            f"Installation ID contains leading or trailing whitespace: '{installation_id}'\n"
+            "Please remove any extra spaces."
+        )
 
     if not installation_id.isdigit():
-        raise ValidationError(f"Installation ID must be numeric: {installation_id}")
+        raise ValidationError(
+            f"Installation ID must be numeric: '{installation_id}'\n"
+            "GitHub App Installation IDs contain only digits.\n"
+            "Example: 12345678"
+        )
 
 
 def validate_jwt_expiry(expiry: int) -> None:
@@ -538,10 +593,54 @@ def prompt_for_input(prompt: str) -> str:
     """Prompt user for input on stderr."""
     eprint(prompt, end='')
     try:
-        return input().strip()
+        return input()
     except (EOFError, KeyboardInterrupt):
         eprint()
         fatal_error("Input cancelled by user")
+
+
+def validate_and_collect_errors(
+    client_id: str,
+    pem_path: Path,
+    installation_id: Optional[str],
+    force: bool,
+    jwt_only: bool
+) -> list[str]:
+    """
+    Validate all inputs and collect any errors.
+
+    Args:
+        client_id: GitHub App Client ID
+        pem_path: Path to private key PEM file
+        installation_id: Installation ID (can be None in JWT-only mode)
+        force: Skip validation where allowed
+        jwt_only: Whether running in JWT-only mode
+
+    Returns:
+        List of error messages (empty if all validations pass)
+    """
+    errors = []
+
+    # Validate client ID
+    try:
+        validate_client_id(client_id, force)
+    except ValidationError as e:
+        errors.append(f"Client ID: {e}")
+
+    # Validate PEM file
+    try:
+        validate_pem_file(pem_path, force)
+    except ValidationError as e:
+        errors.append(f"PEM file: {e}")
+
+    # Validate installation ID (only if not in JWT-only mode)
+    if not jwt_only and installation_id:
+        try:
+            validate_installation_id(installation_id, force)
+        except ValidationError as e:
+            errors.append(f"Installation ID: {e}")
+
+    return errors
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -686,34 +785,72 @@ def main() -> None:
     except ValidationError as e:
         fatal_error(str(e))
 
+    # Determine if we're in interactive mode (prompting for inputs)
+    interactive_mode = not args.client_id or not args.pem_path or (not args.jwt and not args.installation_id)
+
     # Get or prompt for required inputs
     client_id = args.client_id
-    if not client_id:
-        client_id = prompt_for_input("Enter GitHub App Client ID: ")
-
     pem_path_str = args.pem_path
-    if not pem_path_str:
-        pem_path_str = prompt_for_input("Enter path to private key PEM file: ")
-
-    # Installation ID is only needed when not in JWT-only mode
     installation_id = args.installation_id
-    if not args.jwt and not installation_id:
-        installation_id = prompt_for_input("Enter Installation ID: ")
+    pem_path = None
 
-    # Expand path
-    try:
-        pem_path = expand_path(pem_path_str)
-    except Exception as e:
-        fatal_error(f"Invalid path: {e}")
+    if interactive_mode:
+        # Interactive mode: validate each input immediately after entry
+        if not client_id:
+            client_id = prompt_for_input("Enter GitHub App Client ID: ").strip()
+            try:
+                validate_client_id(client_id, args.force)
+            except ValidationError as e:
+                fatal_error(str(e))
 
-    # Validate inputs
-    try:
-        validate_client_id(client_id, args.force)
-        if not args.jwt:
-            validate_installation_id(installation_id, args.force)
-        validate_pem_file(pem_path, args.force)
-    except ValidationError as e:
-        fatal_error(str(e))
+        if not pem_path_str:
+            pem_path_str = prompt_for_input("Enter path to private key PEM file: ").strip()
+        
+        # Expand and validate PEM path immediately
+        try:
+            pem_path = expand_path(pem_path_str)
+        except Exception as e:
+            fatal_error(f"Invalid file path: {e}")
+        
+        try:
+            validate_pem_file(pem_path, args.force)
+        except ValidationError as e:
+            fatal_error(str(e))
+
+        # Installation ID is only needed when not in JWT-only mode
+        if not args.jwt and not installation_id:
+            installation_id = prompt_for_input("Enter Installation ID: ").strip()
+            try:
+                validate_installation_id(installation_id, args.force)
+            except ValidationError as e:
+                fatal_error(str(e))
+    else:
+        # Command-line mode: collect all validation errors and report together
+        # Expand path first
+        try:
+            pem_path = expand_path(pem_path_str)
+        except Exception as e:
+            fatal_error(f"Invalid file path '{pem_path_str}': {e}")
+
+        # Validate all inputs and collect errors
+        validation_errors = validate_and_collect_errors(
+            client_id=client_id,
+            pem_path=pem_path,
+            installation_id=installation_id,
+            force=args.force,
+            jwt_only=args.jwt
+        )
+
+        # If there are validation errors, report them all at once
+        if validation_errors:
+            eprint("Validation failed with the following error(s):\n")
+            for i, error in enumerate(validation_errors, 1):
+                # Add proper indentation for multi-line error messages
+                indented_error = error.replace('\n', '\n  ')
+                eprint(f"{i}. {indented_error}")
+                if i < len(validation_errors):
+                    eprint()  # Blank line between errors
+            sys.exit(1)
 
     # Show progress unless in quiet mode
     if not args.quiet:
