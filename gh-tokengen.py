@@ -667,46 +667,56 @@ class FuzzyPemCompleter:
             candidates: List of Path objects to match against
 
         Returns:
-            List of tuples (name, score, path) sorted by score then natural sort
+            List of tuples (name, score, path) with PEM files first (sorted by score then natural sort),
+            then other matches (sorted by score then natural sort)
         """
         if not query:
-            # No query - return all candidates sorted naturally
-            results = [(c.name, 100.0, c) for c in candidates]
-        else:
-            # Check if query characters appear in order in the candidate name (case-insensitive)
-            def has_ordered_chars(query_str: str, target_str: str) -> bool:
-                """Check if all characters in query appear in order in target."""
-                query_lower = query_str.lower()
-                target_lower = target_str.lower()
-                query_idx = 0
-                for char in target_lower:
-                    if query_idx < len(query_lower) and char == query_lower[query_idx]:
-                        query_idx += 1
-                return query_idx == len(query_lower)
+            # No query - return empty list (don't show completions until user types)
+            return []
 
-            # Filter candidates to only those with characters in order
-            valid_candidates = [c for c in candidates if has_ordered_chars(query, c.name)]
+        # Check if query characters appear in order in the candidate name (case-insensitive)
+        def has_ordered_chars(query_str: str, target_str: str) -> bool:
+            """Check if all characters in query appear in order in target."""
+            query_lower = query_str.lower()
+            target_lower = target_str.lower()
+            query_idx = 0
+            for char in target_lower:
+                if query_idx < len(query_lower) and char == query_lower[query_idx]:
+                    query_idx += 1
+            return query_idx == len(query_lower)
 
-            if not valid_candidates:
-                return []
+        # Filter candidates to only those with characters in order
+        valid_candidates = [c for c in candidates if has_ordered_chars(query, c.name)]
 
-            # Fuzzy match against basenames using QRatio for better sequential matching
-            names = [c.name for c in valid_candidates]
-            matches = self.process.extract(
-                query,
-                names,
-                scorer=self.fuzz.QRatio,
-                limit=None
-                # No score_cutoff - we already filtered by ordered characters
-            )
+        if not valid_candidates:
+            return []
 
-            # Create lookup dict
-            name_to_path = {c.name: c for c in valid_candidates}
-            results = [(name, score, name_to_path[name]) for name, score, _ in matches]
+        # Fuzzy match against basenames using QRatio for better sequential matching
+        names = [c.name for c in valid_candidates]
+        matches = self.process.extract(
+            query,
+            names,
+            scorer=self.fuzz.QRatio,
+            limit=None
+            # No score_cutoff - we already filtered by ordered characters
+        )
 
-        # Sort by score (descending) then natural sort
-        results.sort(key=lambda x: (-x[1], natural_sort_key(x[0])))
-        return results
+        # Create lookup dict
+        name_to_path = {c.name: c for c in valid_candidates}
+        all_results = [(name, score, name_to_path[name]) for name, score, _ in matches]
+
+        # Separate PEM files from other matches
+        pem_results = [(name, score, path) for name, score, path in all_results
+                       if path.is_file() and path.suffix.lower() == '.pem']
+        other_results = [(name, score, path) for name, score, path in all_results
+                        if not (path.is_file() and path.suffix.lower() == '.pem')]
+
+        # Sort each group by score (descending) then natural sort (case-insensitive)
+        pem_results.sort(key=lambda x: (-x[1], natural_sort_key(x[0])))
+        other_results.sort(key=lambda x: (-x[1], natural_sort_key(x[0])))
+
+        # Return PEM files first, then other matches
+        return pem_results + other_results
 
     def get_completions(self, document, complete_event):
         """
@@ -753,31 +763,66 @@ class FuzzyPemCompleter:
                 if not subdirs:
                     return
 
-                matches = self._fuzzy_match(part, subdirs)
-                if matches:
-                    # Use best match
-                    current_dir = matches[0][2]
+                # For intermediate directories, we need to match even with empty part
+                # Otherwise, use fuzzy matching that requires typing
+                if part:
+                    matches = self._fuzzy_match(part, subdirs)
+                    if matches:
+                        # Use best match
+                        current_dir = matches[0][2]
+                    else:
+                        return
                 else:
+                    # Empty part in the middle shouldn't happen, but handle it
                     return
 
             # Get candidates for final segment (includes .pem files)
             # This is where we search for the final_query
             candidates = self._get_candidates(current_dir, True)
-            matches = self._fuzzy_match(final_query, candidates)
 
-            # Generate completions
-            for name, score, path in matches:
-                if path.is_dir():
-                    completion_text = name + '/'
-                else:
-                    completion_text = name
+            # Special case: if final_query is empty (path ends with /),
+            # show all PEM files first, then subdirectories, all in natural order
+            if not final_query:
+                # Separate PEM files and directories
+                pem_files = [c for c in candidates if c.is_file() and c.suffix.lower() == '.pem']
+                directories = [c for c in candidates if c.is_dir()]
 
-                # Calculate how much of the final query to replace
-                yield Completion(
-                    completion_text,
-                    start_position=-len(final_query),
-                    display=completion_text
-                )
+                # Sort both in natural order
+                pem_files.sort(key=lambda p: natural_sort_key(p.name))
+                directories.sort(key=lambda p: natural_sort_key(p.name))
+
+                # Yield PEM files first
+                for path in pem_files:
+                    yield Completion(
+                        path.name,
+                        start_position=0,
+                        display=path.name
+                    )
+
+                # Then yield directories
+                for path in directories:
+                    yield Completion(
+                        path.name + '/',
+                        start_position=0,
+                        display=path.name + '/'
+                    )
+            else:
+                # Normal fuzzy matching
+                matches = self._fuzzy_match(final_query, candidates)
+
+                # Generate completions
+                for name, score, path in matches:
+                    if path.is_dir():
+                        completion_text = name + '/'
+                    else:
+                        completion_text = name
+
+                    # Calculate how much of the final query to replace
+                    yield Completion(
+                        completion_text,
+                        start_position=-len(final_query),
+                        display=completion_text
+                    )
         else:
             # No slash - don't show completions for ~ alone
             if text == '~':
@@ -1115,7 +1160,7 @@ def prompt_for_input(
                 # Find start of word
                 text_before = buf.text[:pos]
                 original_length = len(text_before)
-                
+
                 # Skip trailing whitespace
                 while text_before and text_before[-1] in ' \t':
                     text_before = text_before[:-1]
@@ -1127,12 +1172,12 @@ def prompt_for_input(
                     text_before = text_before[:-1]
 
                 new_pos = len(text_before)
-                
+
                 # Save deleted text to yank buffer
                 deleted_text = buf.text[new_pos:pos]
                 if deleted_text:
                     state.yank_buffer = deleted_text
-                
+
                 buf.cursor_position = new_pos
                 buf.text = text_before + buf.text[pos:]
 
@@ -1149,11 +1194,11 @@ def prompt_for_input(
                 deleted_text = buf.text[:buf.cursor_position]
                 if deleted_text:
                     state.yank_buffer = deleted_text
-                
+
                 # Delete from start to cursor
                 buf.text = buf.text[buf.cursor_position:]
                 buf.cursor_position = 0
-                
+
                 # Trigger completions if path completion is enabled
                 if enable_path_completion and not buf.complete_state:
                     buf.start_completion(select_first=False)
@@ -1167,7 +1212,7 @@ def prompt_for_input(
                 pos = buf.cursor_position
                 buf.text = buf.text[:pos] + state.yank_buffer + buf.text[pos:]
                 buf.cursor_position = pos + len(state.yank_buffer)
-                
+
                 # Trigger completions if path completion is enabled
                 if enable_path_completion and not buf.complete_state:
                     buf.start_completion(select_first=False)
