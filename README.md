@@ -32,40 +32,30 @@ This tool is useful for developers and system administrators who need to program
 
 ### Installation
 
-First, create and activate a virtual environment:
+The tool includes a wrapper script that automatically manages the Python virtual environment. No manual activation is required.
 
 **Using uv (recommended):**
 ```bash
 uv venv
-source .venv/bin/activate  # On macOS/Linux
-# On Windows: .venv\Scripts\activate
+uv pip install -e .
 ```
 
 **Using standard Python:**
 ```bash
-python -m venv .venv
-source .venv/bin/activate  # On macOS/Linux
-# On Windows: .venv\Scripts\activate
+python3 -m venv .venv
+.venv/bin/pip install -e .
 ```
 
-Then install the required dependencies:
+Once installed, the `gh-tokengen` script can be run directly and will automatically use the correct virtual environment. You can also create a symlink to make it available system-wide:
 
-**Using uv:**
 ```bash
-uv pip install cryptography pyjwt
-```
-
-**Using pip:**
-```bash
-pip install cryptography pyjwt
-```
-
-**Alternative - Install from pyproject.toml:**
-```bash
-uv pip install -e .  # Using uv
+# Example: symlink to a directory in your PATH
+ln -s /path/to/gh-tokengen/gh-tokengen ~/bin/gh-tokengen
 # or
-pip install -e .     # Using pip
+ln -s /path/to/gh-tokengen/gh-tokengen /usr/local/bin/gh-tokengen
 ```
+
+The script will work correctly even when run via symlink from any location.
 
 ### GitHub App Requirements
 
@@ -363,6 +353,16 @@ Authorization: Bearer ghs_1234567890abcdefghijklmnopqrstuvwxyz
 5. **Quiet Mode**: Use `--quiet` when you need just the token, but be aware this makes the output more sensitive.
 
 ## Troubleshooting
+
+### "Virtual environment not found"
+
+If you see an error about a missing virtual environment, ensure you've run the installation steps:
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e .
+```
+
+The virtual environment must be created in the same directory as the `gh-tokengen` script.
 
 ### "PEM file not found"
 

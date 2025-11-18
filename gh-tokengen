@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+#
+# gh-tokengen - Wrapper script for GitHub App Token Generator
+#
+# This script activates the Python virtual environment and runs gh-tokengen.py
+# with all provided arguments. It can be symlinked to any directory in your PATH
+# and will always find and use the correct virtual environment.
+
+set -euo pipefail
+
+# Resolve the directory where this script actually resides (following symlinks)
+SCRIPT_DIR="$(cd -P "$(dirname "$0")" && pwd)"
+
+# Define paths relative to the script's actual location
+VENV_ACTIVATE="$SCRIPT_DIR/.venv/bin/activate"
+PYTHON_SCRIPT="$SCRIPT_DIR/gh-tokengen.py"
+
+# Check if the virtual environment exists
+if [ ! -f "$VENV_ACTIVATE" ]; then
+    echo "Error: Virtual environment not found at: $VENV_ACTIVATE" >&2
+    echo "" >&2
+    echo "Please create a virtual environment first:" >&2
+    echo "  cd $SCRIPT_DIR" >&2
+    echo "  python3 -m venv .venv" >&2
+    echo "  source .venv/bin/activate" >&2
+    echo "  pip install -e ." >&2
+    exit 1
+fi
+
+# Activate the virtual environment
+source "$VENV_ACTIVATE"
+
+# Verify activation succeeded
+if [ -z "${VIRTUAL_ENV:-}" ]; then
+    echo "Error: Failed to activate virtual environment" >&2
+    exit 1
+fi
+
+# Check if the Python script exists
+if [ ! -f "$PYTHON_SCRIPT" ]; then
+    echo "Error: Python script not found at: $PYTHON_SCRIPT" >&2
+    exit 1
+fi
+
+# Execute the Python script with all arguments, replacing this shell process
+exec python3 "$PYTHON_SCRIPT" "$@"
