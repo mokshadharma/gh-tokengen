@@ -1585,7 +1585,7 @@ def prompt_for_input(
         session: PromptSession[str] = PromptSession(
             message=prompt_text,
             editing_mode=editing_mode,
-            completer=completer,  # type: ignore - FuzzyPemCompleter implements Completer protocol
+            completer=completer,  # type: ignore  # FuzzyPemCompleter implements Completer protocol
             complete_while_typing=enable_path_completion,
             output=output,
             enable_history_search=False,
