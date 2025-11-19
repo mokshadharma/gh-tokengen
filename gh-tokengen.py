@@ -1844,9 +1844,18 @@ def validate_command_line_args(args: argparse.Namespace) -> None:
         fatal_error(str(e))
 
 
-def is_interactive_mode(args: argparse.Namespace) -> bool:
-    """Determine if we're in interactive mode."""
-    return not args.client_id or not args.pem_path or (not args.jwt and not args.installation_id)
+def collect_inputs(args: argparse.Namespace) -> Tuple[str, Path, str, Optional[str]]:
+    """Collect inputs either interactively or from command-line arguments.
+    
+    Returns:
+        Tuple of (client_id, pem_path, pem_path_str, installation_id)
+    """
+    is_interactive = not args.client_id or not args.pem_path or (not args.jwt and not args.installation_id)
+    
+    if is_interactive:
+        return collect_inputs_interactively(args)
+    else:
+        return collect_inputs_from_args(args)
 
 
 def prompt_for_client_id(force: bool) -> str:
@@ -1958,8 +1967,11 @@ def collect_inputs_from_args(args: argparse.Namespace) -> Tuple[str, Path, str, 
     return client_id, pem_path, pem_path_str, installation_id
 
 
-def print_debug_info(args: argparse.Namespace, client_id: str, pem_path_str: str, installation_id: Optional[str]) -> None:
-    """Print debug information."""
+def show_progress_and_debug_info(args: argparse.Namespace, client_id: str, pem_path_str: str, installation_id: Optional[str]) -> None:
+    """Show progress message and debug information."""
+    if not args.quiet:
+        eprint(f"Reading private key from: {pem_path_str}")
+    
     debug_print(f"Client ID: {client_id}", args.debug)
     if not args.jwt and installation_id:
         debug_print(f"Installation ID: {installation_id}", args.debug)
@@ -1968,8 +1980,8 @@ def print_debug_info(args: argparse.Namespace, client_id: str, pem_path_str: str
     debug_print(f"User-Agent: {args.user_agent}", args.debug)
 
 
-def handle_jwt_only_mode(args: argparse.Namespace, client_id: str, pem_path: Path) -> None:
-    """Generate and output JWT in JWT-only mode."""
+def generate_and_output_jwt(args: argparse.Namespace, client_id: str, pem_path: Path) -> None:
+    """Generate and output JWT, then exit."""
     jwt_token, issued_at, expires_at = generate_jwt(
         client_id=client_id,
         pem_path=pem_path,
@@ -1986,13 +1998,34 @@ def handle_jwt_only_mode(args: argparse.Namespace, client_id: str, pem_path: Pat
         eprint("Successfully generated JWT!\n")
 
     output_jwt(jwt_token, issued_at, expires_at, args.output_format, args.quiet)
+    sys.exit(0)
 
 
-def show_progress_messages(args: argparse.Namespace) -> None:
-    """Show progress messages for token generation."""
+def generate_and_output_installation_token(args: argparse.Namespace, client_id: str, pem_path: Path, installation_id: str) -> None:
+    """Generate installation token and output it."""
+    # Show progress messages
     if not args.quiet and not args.debug:
         eprint(f"Generating JWT (expires in {args.jwt_expiry} seconds)...")
         eprint("Exchanging JWT for installation token...")
+    
+    # Get installation token
+    token_data = get_installation_token(
+        client_id=client_id,
+        pem_path=pem_path,
+        installation_id=installation_id,
+        api_url=args.api_url,
+        jwt_expiry=args.jwt_expiry,
+        user_agent=args.user_agent,
+        debug=args.debug,
+        show_headers=args.headers,
+        dry_run=args.dry_run
+    )
+    
+    # Show success information
+    show_token_success_info(args, token_data)
+    
+    # Output token
+    output_installation_token(args, token_data)
 
 
 def show_token_success_info(args: argparse.Namespace, token_data: Dict[str, Any]) -> None:
@@ -2034,47 +2067,22 @@ def output_installation_token(args: argparse.Namespace, token_data: Dict[str, An
             output_token(token_data, args.output_format, False, args.timestamp_format)
 
 
+def generate_token(args: argparse.Namespace, client_id: str, pem_path: Path, installation_id: Optional[str]) -> None:
+    """Generate either JWT or installation token based on mode."""
+    if args.jwt:
+        generate_and_output_jwt(args, client_id, pem_path)
+    else:
+        assert installation_id is not None
+        generate_and_output_installation_token(args, client_id, pem_path, installation_id)
+
+
 def main() -> None:
     """Main entry point - orchestrates token generation workflow."""
     args = parse_arguments()
     validate_command_line_args(args)
-
-    # Collect required inputs
-    if is_interactive_mode(args):
-        client_id, pem_path, pem_path_str, installation_id = collect_inputs_interactively(args)
-    else:
-        client_id, pem_path, pem_path_str, installation_id = collect_inputs_from_args(args)
-
-    # Show progress
-    if not args.quiet:
-        eprint(f"Reading private key from: {pem_path_str}")
-
-    print_debug_info(args, client_id, pem_path_str, installation_id)
-
-    # Handle JWT-only mode
-    if args.jwt:
-        handle_jwt_only_mode(args, client_id, pem_path)
-        return
-
-    # Generate installation token
-    assert installation_id is not None  # Guaranteed by collect_inputs functions
-
-    show_progress_messages(args)
-
-    token_data = get_installation_token(
-        client_id=client_id,
-        pem_path=pem_path,
-        installation_id=installation_id,
-        api_url=args.api_url,
-        jwt_expiry=args.jwt_expiry,
-        user_agent=args.user_agent,
-        debug=args.debug,
-        show_headers=args.headers,
-        dry_run=args.dry_run
-    )
-
-    show_token_success_info(args, token_data)
-    output_installation_token(args, token_data)
+    client_id, pem_path, pem_path_str, installation_id = collect_inputs(args)
+    show_progress_and_debug_info(args, client_id, pem_path_str, installation_id)
+    generate_token(args, client_id, pem_path, installation_id)
 
 
 if __name__ == '__main__':
