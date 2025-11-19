@@ -874,10 +874,10 @@ class FuzzyPemCompleter:
                     )
             else:
                 # Normal fuzzy matching
-                matches: List[Tuple[str, float, Path]] = self._fuzzy_match(final_query, candidates)
+                fuzzy_matches: List[Tuple[str, float, Path]] = self._fuzzy_match(final_query, candidates)
 
                 # Generate completions
-                for name, score, path in matches:
+                for name, score, path in fuzzy_matches:
                     completion_text: str
                     if path.is_dir():
                         completion_text = name + '/'
