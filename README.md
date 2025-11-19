@@ -381,9 +381,9 @@ The Installation ID is a number you can find in the URL when viewing your app's 
 
 ### "Required dependencies not found"
 
-Install the required Python packages:
+Install the required Python packages inside the virtual environment:
 ```bash
-pip install PyJWT cryptography
+.venv/bin/pip install PyJWT cryptography
 ```
 
 ### "HTTP 401 error"
