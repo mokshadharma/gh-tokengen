@@ -447,16 +447,16 @@ def format_expiration(
         elif format_type == 'unix':
             return str(int(exp_dt.timestamp()))
         elif format_type == 'relative':
-            now: datetime = datetime.now(timezone.utc)
-            delta: timedelta = exp_dt - now
+            now_utc: datetime = datetime.now(timezone.utc)
+            delta: timedelta = exp_dt - now_utc
             minutes: int = int(delta.total_seconds() / 60)
             return f"in {minutes} minutes"
         else:  # human (default)
-            now: datetime = datetime.now(timezone.utc)
-            delta: timedelta = exp_dt - now
-            minutes: int = int(delta.total_seconds() / 60)
+            now_utc: datetime = datetime.now(timezone.utc)
+            delta_time: timedelta = exp_dt - now_utc
+            minutes_left: int = int(delta_time.total_seconds() / 60)
             formatted_time: str = exp_dt.strftime('%Y-%m-%d %H:%M:%S UTC')
-            return f"in {minutes} minutes ({formatted_time})"
+            return f"in {minutes_left} minutes ({formatted_time})"
     except Exception as e:
         debug_print(f"Failed to parse expiration time: {e}", True)
         return expires_at
