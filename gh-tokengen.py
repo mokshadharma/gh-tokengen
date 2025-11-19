@@ -988,7 +988,7 @@ def prompt_for_input(
         no_fuzzy = True
         enable_path_completion = False
     try:
-        from prompt_toolkit import prompt, PromptSession
+        from prompt_toolkit import PromptSession
         from prompt_toolkit.completion import PathCompleter, Completer, Completion
         from prompt_toolkit.enums import EditingMode
         from prompt_toolkit.output import create_output
