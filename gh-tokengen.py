@@ -1923,36 +1923,71 @@ def collect_inputs_interactively(args: argparse.Namespace) -> Tuple[str, Path, s
     return client_id, pem_path, pem_path_str, installation_id
 
 
-def collect_inputs_from_args(args: argparse.Namespace) -> Tuple[str, Path, str, Optional[str]]:
-    """
-    Collect and validate inputs from command-line arguments.
+def ensure_pem_path_provided(pem_path_str: Optional[str]) -> str:
+    """Ensure PEM path is provided, exit if not.
+
+    Args:
+        pem_path_str: The PEM path string (may be None)
 
     Returns:
-        Tuple of (client_id, pem_path, pem_path_str, installation_id)
+        The PEM path string (guaranteed non-None)
     """
-    client_id = args.client_id
-    pem_path_str = args.pem_path
-    installation_id = args.installation_id
-
     if not pem_path_str:
         fatal_error("PEM path is required")
+    return pem_path_str
 
+
+def ensure_client_id_provided(client_id: Optional[str]) -> str:
+    """Ensure Client ID is provided, exit if not.
+
+    Args:
+        client_id: The client ID string (may be None)
+
+    Returns:
+        The client ID string (guaranteed non-None)
+    """
     if not client_id:
         fatal_error("Client ID is required")
+    return client_id
 
-    # Expand path
+
+def expand_path_or_exit(pem_path_str: str) -> Path:
+    """Expand path, exit with error message on failure.
+
+    Args:
+        pem_path_str: The path string to expand
+
+    Returns:
+        Expanded Path object
+    """
     try:
-        pem_path = expand_path(pem_path_str)
+        return expand_path(pem_path_str)
     except Exception as e:
         fatal_error(f"Invalid file path '{pem_path_str}': {e}")
 
-    # Validate all inputs
+
+def validate_all_or_exit(
+    client_id: str,
+    pem_path: Path,
+    installation_id: Optional[str],
+    force: bool,
+    jwt_only: bool
+) -> None:
+    """Validate all inputs and exit with formatted errors if any fail.
+
+    Args:
+        client_id: GitHub App Client ID
+        pem_path: Path to private key PEM file
+        installation_id: Installation ID (can be None in JWT-only mode)
+        force: Skip validation where allowed
+        jwt_only: Whether running in JWT-only mode
+    """
     validation_errors = validate_and_collect_errors(
         client_id=client_id,
         pem_path=pem_path,
         installation_id=installation_id,
-        force=args.force,
-        jwt_only=args.jwt
+        force=force,
+        jwt_only=jwt_only
     )
 
     if validation_errors:
@@ -1964,7 +1999,22 @@ def collect_inputs_from_args(args: argparse.Namespace) -> Tuple[str, Path, str, 
                 eprint()
         sys.exit(1)
 
-    return client_id, pem_path, pem_path_str, installation_id
+
+def collect_inputs_from_args(args: argparse.Namespace) -> Tuple[str, Path, str, Optional[str]]:
+    """Collect and validate inputs from command-line arguments.
+
+    This function orchestrates the collection and validation process
+    through a linear sequence of function calls. Each helper function
+    makes its own decisions internally and handles errors by exiting.
+
+    Returns:
+        Tuple of (client_id, pem_path, pem_path_str, installation_id)
+    """
+    pem_path_str = ensure_pem_path_provided(args.pem_path)
+    client_id = ensure_client_id_provided(args.client_id)
+    pem_path = expand_path_or_exit(pem_path_str)
+    validate_all_or_exit(client_id, pem_path, args.installation_id, args.force, args.jwt)
+    return client_id, pem_path, pem_path_str, args.installation_id
 
 
 def show_progress_and_debug_info(args: argparse.Namespace, client_id: str, pem_path_str: str, installation_id: Optional[str]) -> None:
