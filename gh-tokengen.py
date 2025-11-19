@@ -1846,12 +1846,12 @@ def validate_command_line_args(args: argparse.Namespace) -> None:
 
 def collect_inputs(args: argparse.Namespace) -> Tuple[str, Path, str, Optional[str]]:
     """Collect inputs either interactively or from command-line arguments.
-    
+
     Returns:
         Tuple of (client_id, pem_path, pem_path_str, installation_id)
     """
     is_interactive = not args.client_id or not args.pem_path or (not args.jwt and not args.installation_id)
-    
+
     if is_interactive:
         return collect_inputs_interactively(args)
     else:
@@ -1971,7 +1971,7 @@ def show_progress_and_debug_info(args: argparse.Namespace, client_id: str, pem_p
     """Show progress message and debug information."""
     if not args.quiet:
         eprint(f"Reading private key from: {pem_path_str}")
-    
+
     debug_print(f"Client ID: {client_id}", args.debug)
     if not args.jwt and installation_id:
         debug_print(f"Installation ID: {installation_id}", args.debug)
@@ -2007,7 +2007,7 @@ def generate_and_output_installation_token(args: argparse.Namespace, client_id: 
     if not args.quiet and not args.debug:
         eprint(f"Generating JWT (expires in {args.jwt_expiry} seconds)...")
         eprint("Exchanging JWT for installation token...")
-    
+
     # Get installation token
     token_data = get_installation_token(
         client_id=client_id,
@@ -2020,10 +2020,10 @@ def generate_and_output_installation_token(args: argparse.Namespace, client_id: 
         show_headers=args.headers,
         dry_run=args.dry_run
     )
-    
+
     # Show success information
     show_token_success_info(args, token_data)
-    
+
     # Output token
     output_installation_token(args, token_data)
 
