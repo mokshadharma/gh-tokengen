@@ -1582,7 +1582,7 @@ def prompt_for_input(
                 buf.complete_next()
 
         # Create a session with the desired settings
-        session = PromptSession(
+        session: PromptSession[str] = PromptSession(
             message=prompt_text,
             editing_mode=editing_mode,
             completer=completer,  # type: ignore - FuzzyPemCompleter implements Completer protocol
