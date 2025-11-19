@@ -1474,20 +1474,20 @@ def prompt_for_input(
                             return (text, str(candidate))
 
                     # Try matching based on mode
-                    matching_candidates: List[Path] = [c for c in candidate_items if matches_query(text, c.name)]
-                    if matching_candidates:
+                    matching_items: List[Path] = [c for c in candidate_items if matches_query(text, c.name)]
+                    if matching_items:
                         if no_fuzzy:
                             # Prefix mode: use first match
-                            matched: Path = matching_candidates[0]
+                            matched: Path = matching_items[0]
                             return (matched.name, str(matched))
                         else:
                             # Fuzzy mode: use best match
                             from rapidfuzz import fuzz, process
-                            names: List[str] = [c.name for c in matching_candidates]
+                            names: List[str] = [c.name for c in matching_items]
                             matches: List[Tuple[str, float, int]] = process.extract(text, names, scorer=fuzz.QRatio, limit=1)
                             if matches:
                                 best_name = matches[0][0]
-                                matched = next(c for c in matching_candidates if c.name == best_name)
+                                matched = next(c for c in matching_items if c.name == best_name)
                                 return (matched.name, str(matched))
 
                     return None
