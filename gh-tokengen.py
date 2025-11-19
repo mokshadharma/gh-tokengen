@@ -1290,7 +1290,6 @@ def prompt_for_input(
                 pos = buf.cursor_position
                 # Find start of word
                 text_before = buf.text[:pos]
-                original_length = len(text_before)
 
                 # Skip trailing whitespace
                 while text_before and text_before[-1] in ' \t':
