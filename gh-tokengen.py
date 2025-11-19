@@ -992,7 +992,7 @@ def prompt_for_input(
         from prompt_toolkit.enums import EditingMode
         from prompt_toolkit.output import create_output
         from prompt_toolkit.validation import Validator, ValidationError as PTValidationError
-        from prompt_toolkit.formatted_text import HTML, ANSI
+        from prompt_toolkit.formatted_text import HTML
         from prompt_toolkit.key_binding import KeyBindings
         from prompt_toolkit.keys import Keys
         from prompt_toolkit.layout.processors import Processor, Transformation
