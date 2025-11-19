@@ -14,14 +14,17 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, Any, Optional, Tuple, NoReturn, Callable
+from typing import Dict, Any, Optional, Tuple, NoReturn, Callable, List, Union, Iterator
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
+from urllib.parse import urlparse, ParseResult
 import base64
 import hashlib
 import hmac
+import os
 import re
+import threading
+import traceback
 
 __version__ = "1.0.0"
 
@@ -301,23 +304,23 @@ def generate_jwt(
             )
 
         # Generate JWT
-        now = int(time.time())
-        payload = {
+        now: int = int(time.time())
+        payload: Dict[str, Union[int, str]] = {
             'iat': now - 60,  # Issued at (with 60s clock skew tolerance)
             'exp': now + expiry_seconds,  # Expiration
             'iss': client_id  # Issuer (Client ID)
         }
 
-        token = pyjwt.encode(payload, private_key, algorithm='RS256')
+        token: str = pyjwt.encode(payload, private_key, algorithm='RS256')
 
         if debug:
-            exp_time = datetime.fromtimestamp(payload['exp'], tz=timezone.utc)
+            exp_time: datetime = datetime.fromtimestamp(payload['exp'], tz=timezone.utc)  # type: ignore[arg-type]
             debug_print(f"JWT generated successfully", debug)
-            debug_print(f"JWT issued at: {datetime.fromtimestamp(payload['iat'], tz=timezone.utc)}", debug)
+            debug_print(f"JWT issued at: {datetime.fromtimestamp(payload['iat'], tz=timezone.utc)}", debug)  # type: ignore[arg-type]
             debug_print(f"JWT expires at: {exp_time}", debug)
             debug_print(f"JWT preview: {token[:20]}...{token[-20:]}", debug)
 
-        return token, payload['iat'], payload['exp']
+        return token, int(payload['iat']), int(payload['exp'])  # type: ignore[arg-type]
 
     except ImportError as e:
         if debug:
@@ -373,7 +376,7 @@ def make_api_request(
     Returns:
         Tuple of (response_data, response_headers)
     """
-    headers = {
+    headers: Dict[str, str] = {
         'Authorization': f'Bearer {token}',
         'Accept': 'application/vnd.github+json',
         'User-Agent': user_agent,
@@ -385,10 +388,10 @@ def make_api_request(
         debug_print(f"Request headers:\n{format_headers_for_display(headers)}", debug)
 
     try:
-        request = Request(url, headers=headers, method='POST')
+        request: Request = Request(url, headers=headers, method='POST')
         with urlopen(request) as response:
-            response_headers = dict(response.headers)
-            data = json.loads(response.read().decode('utf-8'))
+            response_headers: Dict[str, str] = dict(response.headers)
+            data: Dict[str, Any] = json.loads(response.read().decode('utf-8'))
 
             if show_headers or debug:
                 eprint("\nResponse headers:")
@@ -437,22 +440,22 @@ def format_expiration(
         Formatted expiration string
     """
     try:
-        exp_dt = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+        exp_dt: datetime = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
 
         if format_type == 'iso8601':
             return exp_dt.isoformat()
         elif format_type == 'unix':
             return str(int(exp_dt.timestamp()))
         elif format_type == 'relative':
-            now = datetime.now(timezone.utc)
-            delta = exp_dt - now
-            minutes = int(delta.total_seconds() / 60)
+            now: datetime = datetime.now(timezone.utc)
+            delta: timedelta = exp_dt - now
+            minutes: int = int(delta.total_seconds() / 60)
             return f"in {minutes} minutes"
         else:  # human (default)
-            now = datetime.now(timezone.utc)
-            delta = exp_dt - now
-            minutes = int(delta.total_seconds() / 60)
-            formatted_time = exp_dt.strftime('%Y-%m-%d %H:%M:%S UTC')
+            now: datetime = datetime.now(timezone.utc)
+            delta: timedelta = exp_dt - now
+            minutes: int = int(delta.total_seconds() / 60)
+            formatted_time: str = exp_dt.strftime('%Y-%m-%d %H:%M:%S UTC')
             return f"in {minutes} minutes ({formatted_time})"
     except Exception as e:
         debug_print(f"Failed to parse expiration time: {e}", True)
@@ -488,7 +491,7 @@ def output_jwt(
         quiet: Suppress non-essential output
     """
     if output_format == 'json':
-        output = {
+        output: Dict[str, str] = {
             'jwt': jwt_token,
             'issued_at': datetime.fromtimestamp(issued_at, tz=timezone.utc).isoformat(),
             'expires_at': datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat()
@@ -520,10 +523,10 @@ def output_token(
         quiet: Suppress non-essential output
         timestamp_format: How to format timestamps
     """
-    token = token_data.get('token', '')
+    token: str = token_data.get('token', '')
 
     if output_format == 'json':
-        output = {
+        output: Dict[str, Any] = {
             'token': token,
             'expires_at': token_data.get('expires_at', ''),
             'permissions': token_data.get('permissions', {}),
@@ -532,11 +535,11 @@ def output_token(
 
         # Calculate expires_in_seconds
         try:
-            exp_dt = datetime.fromisoformat(
+            exp_dt: datetime = datetime.fromisoformat(
                 token_data.get('expires_at', '').replace('Z', '+00:00')
             )
-            now = datetime.now(timezone.utc)
-            expires_in = int((exp_dt - now).total_seconds())
+            now: datetime = datetime.now(timezone.utc)
+            expires_in: int = int((exp_dt - now).total_seconds())
             output['expires_in_seconds'] = expires_in
         except:
             pass
@@ -582,17 +585,20 @@ def get_installation_token(
         Token data from GitHub API
     """
     # Generate JWT
+    jwt_token: str
+    issued_at: int
+    expires_at: int
     jwt_token, issued_at, expires_at = generate_jwt(client_id, pem_path, jwt_expiry, debug)
 
     # Prepare API request
-    endpoint = f"{api_url.rstrip('/')}/app/installations/{installation_id}/access_tokens"
+    endpoint: str = f"{api_url.rstrip('/')}/app/installations/{installation_id}/access_tokens"
 
     if dry_run:
         eprint("\n[DRY RUN] Would make the following API request:")
         eprint(f"  URL: {endpoint}")
         eprint(f"  Method: POST")
         eprint(f"  Headers:")
-        headers = {
+        headers: Dict[str, str] = {
             'Authorization': f'Bearer {jwt_token}',
             'Accept': 'application/vnd.github+json',
             'User-Agent': user_agent,
@@ -603,6 +609,8 @@ def get_installation_token(
         sys.exit(0)
 
     # Exchange JWT for installation token
+    token_data: Dict[str, Any]
+    response_headers: Dict[str, str]
     token_data, response_headers = make_api_request(
         endpoint,
         jwt_token,
@@ -614,7 +622,7 @@ def get_installation_token(
     return token_data
 
 
-def natural_sort_key(s: str) -> list:
+def natural_sort_key(s: str) -> List[Union[int, str]]:
     """
     Generate a sort key for natural sorting (handles numbers in strings).
 
@@ -639,7 +647,7 @@ class FuzzyPemCompleter:
     Implements prompt_toolkit's Completer protocol via duck typing.
     """
 
-    def __init__(self, base_dir: Path, no_fuzzy: bool = False):
+    def __init__(self, base_dir: Path, no_fuzzy: bool = False) -> None:
         """
         Initialize the fuzzy completer.
 
@@ -647,18 +655,18 @@ class FuzzyPemCompleter:
             base_dir: Starting directory for path completion
             no_fuzzy: If True, use prefix-only matching instead of fuzzy matching
         """
-        self.base_dir = base_dir
-        self.no_fuzzy = no_fuzzy
+        self.base_dir: Path = base_dir
+        self.no_fuzzy: bool = no_fuzzy
         from rapidfuzz import fuzz, process
-        self.fuzz = fuzz
-        self.process = process
+        self.fuzz: Any = fuzz
+        self.process: Any = process
 
     def _expand_path(self, path_str: str) -> Path:
         """Expand ~ and $HOME in path string."""
         expanded = path_str.replace('$HOME', str(Path.home()))
         return Path(expanded).expanduser()
 
-    def _get_candidates(self, directory: Path, is_final_segment: bool) -> list[Path]:
+    def _get_candidates(self, directory: Path, is_final_segment: bool) -> List[Path]:
         """
         Get completion candidates from a directory.
 
@@ -672,7 +680,7 @@ class FuzzyPemCompleter:
         if not directory.exists() or not directory.is_dir():
             return []
 
-        candidates = []
+        candidates: List[Path] = []
         try:
             for item in directory.iterdir():
                 if item.is_dir():
@@ -684,7 +692,7 @@ class FuzzyPemCompleter:
 
         return candidates
 
-    def _fuzzy_match(self, query: str, candidates: list[Path]) -> list[tuple[str, float, Path]]:
+    def _fuzzy_match(self, query: str, candidates: List[Path]) -> List[Tuple[str, float, Path]]:
         """
         Perform fuzzy matching on candidates.
 
@@ -703,21 +711,22 @@ class FuzzyPemCompleter:
         if self.no_fuzzy:
             # Prefix-only matching with case sensitivity rules
             # Case-sensitive if any uppercase in query, case-insensitive otherwise
-            query_has_upper = any(c.isupper() for c in query)
+            query_has_upper: bool = any(c.isupper() for c in query)
 
+            matches_paths: List[Path]
             if query_has_upper:
                 # Case-sensitive matching
-                matches = [c for c in candidates if c.name.startswith(query)]
+                matches_paths = [c for c in candidates if c.name.startswith(query)]
             else:
                 # Case-insensitive matching
-                query_lower = query.lower()
-                matches = [c for c in candidates if c.name.lower().startswith(query_lower)]
+                query_lower: str = query.lower()
+                matches_paths = [c for c in candidates if c.name.lower().startswith(query_lower)]
 
-            if not matches:
+            if not matches_paths:
                 return []
 
             # Assign score of 100 to all prefix matches (they're all equally good)
-            results = [(c.name, 100.0, c) for c in matches]
+            results: List[Tuple[str, float, Path]] = [(c.name, 100.0, c) for c in matches_paths]
         else:
             # Fuzzy matching mode (original behavior)
             # Check if query characters appear in order in the candidate name (case-insensitive)
@@ -732,14 +741,14 @@ class FuzzyPemCompleter:
                 return query_idx == len(query_lower)
 
             # Filter candidates to only those with characters in order
-            valid_candidates = [c for c in candidates if has_ordered_chars(query, c.name)]
+            valid_candidates: List[Path] = [c for c in candidates if has_ordered_chars(query, c.name)]
 
             if not valid_candidates:
                 return []
 
             # Fuzzy match against basenames using QRatio for better sequential matching
-            names = [c.name for c in valid_candidates]
-            matches = self.process.extract(
+            names: List[str] = [c.name for c in valid_candidates]
+            matches: List[Tuple[str, float, int]] = self.process.extract(
                 query,
                 names,
                 scorer=self.fuzz.QRatio,
@@ -748,14 +757,15 @@ class FuzzyPemCompleter:
             )
 
             # Create lookup dict
-            name_to_path = {c.name: c for c in valid_candidates}
+            name_to_path: Dict[str, Path] = {c.name: c for c in valid_candidates}
 
             # Apply prefix bonus: boost score for filenames that start with the query
             # This ensures prefix matches rank higher than fuzzy matches in the middle
-            adjusted_results = []
+            adjusted_results: List[Tuple[str, float, Path]] = []
             for name, score, _ in matches:
-                path = name_to_path[name]
+                path: Path = name_to_path[name]
                 # Add significant bonus if name starts with query (case-insensitive)
+                adjusted_score: float
                 if name.lower().startswith(query.lower()):
                     adjusted_score = score + 50.0
                 else:
@@ -777,7 +787,7 @@ class FuzzyPemCompleter:
         # Return PEM files first, then other matches
         return pem_results + other_results
 
-    def get_completions(self, document, complete_event):
+    def get_completions(self, document: Any, complete_event: Any) -> Iterator[Any]:
         """
         Generate completions for the current document state.
 
@@ -790,16 +800,17 @@ class FuzzyPemCompleter:
         """
         from prompt_toolkit.completion import Completion
 
-        text = document.text_before_cursor
+        text: str = document.text_before_cursor
 
         # Parse the path into components
         if '/' in text:
             # Split into directory parts and final query
-            parts = text.split('/')
-            final_query = parts[-1]
-            dir_parts = parts[:-1]
+            parts: List[str] = text.split('/')
+            final_query: str = parts[-1]
+            dir_parts: List[str] = parts[:-1]
 
             # Build the directory path - expand ~ and $HOME for internal use
+            current_dir: Path
             if text.startswith('/'):
                 current_dir = Path('/')
             elif text.startswith('~/') or text.startswith('$HOME/'):
@@ -837,14 +848,14 @@ class FuzzyPemCompleter:
 
             # Get candidates for final segment (includes .pem files)
             # This is where we search for the final_query
-            candidates = self._get_candidates(current_dir, True)
+            candidates: List[Path] = self._get_candidates(current_dir, True)
 
             # Special case: if final_query is empty (path ends with /),
             # show all PEM files first, then subdirectories, all in natural order
             if not final_query:
                 # Separate PEM files and directories
-                pem_files = [c for c in candidates if c.is_file() and c.suffix.lower() == '.pem']
-                directories = [c for c in candidates if c.is_dir()]
+                pem_files: List[Path] = [c for c in candidates if c.is_file() and c.suffix.lower() == '.pem']
+                directories: List[Path] = [c for c in candidates if c.is_dir()]
 
                 # Sort both in natural order
                 pem_files.sort(key=lambda p: natural_sort_key(p.name))
@@ -867,10 +878,11 @@ class FuzzyPemCompleter:
                     )
             else:
                 # Normal fuzzy matching
-                matches = self._fuzzy_match(final_query, candidates)
+                matches: List[Tuple[str, float, Path]] = self._fuzzy_match(final_query, candidates)
 
                 # Generate completions
                 for name, score, path in matches:
+                    completion_text: str
                     if path.is_dir():
                         completion_text = name + '/'
                     else:
@@ -908,7 +920,7 @@ class FuzzyPemCompleter:
                         display=completion_text
                     )
 
-    async def get_completions_async(self, document, complete_event):
+    async def get_completions_async(self, document: Any, complete_event: Any) -> Any:
         """
         Async version of get_completions required by prompt_toolkit.
 
@@ -1343,7 +1355,7 @@ def prompt_for_input(
                 if enable_path_completion and not buf.complete_state:
                     buf.start_completion(select_first=False)
 
-        def resolve_fuzzy_path(text: str) -> Optional[tuple[str, str]]:
+        def resolve_fuzzy_path(text: str) -> Optional[Tuple[str, str]]:
             """Resolve a fuzzy path to an actual full path.
 
             Returns:
@@ -1355,9 +1367,9 @@ def prompt_for_input(
             try:
                 # Helper for matching based on mode
                 def has_ordered_chars(query_str: str, target_str: str) -> bool:
-                    query_lower = query_str.lower()
-                    target_lower = target_str.lower()
-                    query_idx = 0
+                    query_lower: str = query_str.lower()
+                    target_lower: str = target_str.lower()
+                    query_idx: int = 0
                     for char in target_lower:
                         if query_idx < len(query_lower) and char == query_lower[query_idx]:
                             query_idx += 1
@@ -1377,15 +1389,18 @@ def prompt_for_input(
                         return has_ordered_chars(query_str, target_str)
 
                 # Track if path started with ~ or $HOME for preserving it
-                starts_with_tilde = text.startswith('~/')
-                starts_with_home = text.startswith('$HOME/')
-                starts_with_bare_tilde = text == '~'
+                starts_with_tilde: bool = text.startswith('~/')
+                starts_with_home: bool = text.startswith('$HOME/')
+                starts_with_bare_tilde: bool = text == '~'
 
                 # Parse the path
                 if '/' in text:
-                    parts = text.split('/')
+                    parts: List[str] = text.split('/')
 
                     # Determine base directory
+                    current_dir: Path
+                    start_idx: int
+                    unexpanded_parts: List[str]
                     if text.startswith('/'):
                         current_dir = Path('/')
                         start_idx = 1
@@ -1401,13 +1416,13 @@ def prompt_for_input(
 
                     # Navigate through each part
                     for i in range(start_idx, len(parts)):
-                        part = parts[i]
+                        part: str = parts[i]
                         if not part or part in ('~', '$HOME'):
                             continue
 
                         # Get candidates in current directory
-                        is_last = (i == len(parts) - 1)
-                        candidates = []
+                        is_last: bool = (i == len(parts) - 1)
+                        candidates: List[Path] = []
 
                         if current_dir.exists():
                             for item in current_dir.iterdir():
@@ -1421,41 +1436,41 @@ def prompt_for_input(
                                         candidates.append(item)
 
                         # Try exact match first
-                        matched = None
+                        matched_path: Optional[Path] = None
                         for candidate in candidates:
                             if candidate.name == part:
-                                matched = candidate
+                                matched_path = candidate
                                 break
 
                         # If no exact match, try matching based on mode
-                        if not matched:
-                            matching_candidates = [c for c in candidates if matches_query(part, c.name)]
+                        if not matched_path:
+                            matching_candidates: List[Path] = [c for c in candidates if matches_query(part, c.name)]
                             if matching_candidates:
                                 if no_fuzzy:
                                     # Prefix mode: use first match
-                                    matched = matching_candidates[0]
+                                    matched_path = matching_candidates[0]
                                 else:
                                     # Fuzzy mode: use the best match (first one after sorting by score)
                                     from rapidfuzz import fuzz, process
-                                    names = [c.name for c in matching_candidates]
-                                    matches = process.extract(part, names, scorer=fuzz.QRatio, limit=1)
+                                    names: List[str] = [c.name for c in matching_candidates]
+                                    matches: List[Tuple[str, float, int]] = process.extract(part, names, scorer=fuzz.QRatio, limit=1)
                                     if matches:
-                                        best_name = matches[0][0]
-                                        matched = next(c for c in matching_candidates if c.name == best_name)
+                                        best_name: str = matches[0][0]
+                                        matched_path = next(c for c in matching_candidates if c.name == best_name)
 
-                        if matched:
-                            current_dir = matched
-                            unexpanded_parts.append(matched.name)
+                        if matched_path:
+                            current_dir = matched_path
+                            unexpanded_parts.append(matched_path.name)
                         else:
                             return None
 
                     # Return both unexpanded and expanded paths
-                    unexpanded = '/'.join(unexpanded_parts)
+                    unexpanded: str = '/'.join(unexpanded_parts)
                     return (unexpanded, str(current_dir))
                 else:
                     # No slash - match in current directory
-                    base_dir = Path(os.getcwd())
-                    candidates = []
+                    base_dir: Path = Path(os.getcwd())
+                    candidates: List[Path] = []
 
                     if base_dir.exists():
                         for item in base_dir.iterdir():
@@ -1468,17 +1483,17 @@ def prompt_for_input(
                             return (text, str(candidate))
 
                     # Try matching based on mode
-                    matching_candidates = [c for c in candidates if matches_query(text, c.name)]
+                    matching_candidates: List[Path] = [c for c in candidates if matches_query(text, c.name)]
                     if matching_candidates:
                         if no_fuzzy:
                             # Prefix mode: use first match
-                            matched = matching_candidates[0]
+                            matched: Path = matching_candidates[0]
                             return (matched.name, str(matched))
                         else:
                             # Fuzzy mode: use best match
                             from rapidfuzz import fuzz, process
-                            names = [c.name for c in matching_candidates]
-                            matches = process.extract(text, names, scorer=fuzz.QRatio, limit=1)
+                            names: List[str] = [c.name for c in matching_candidates]
+                            matches: List[Tuple[str, float, int]] = process.extract(text, names, scorer=fuzz.QRatio, limit=1)
                             if matches:
                                 best_name = matches[0][0]
                                 matched = next(c for c in matching_candidates if c.name == best_name)
@@ -1650,7 +1665,7 @@ def validate_and_collect_errors(
     installation_id: Optional[str],
     force: bool,
     jwt_only: bool
-) -> list[str]:
+) -> List[str]:
     """
     Validate all inputs and collect any errors.
 
@@ -1664,7 +1679,7 @@ def validate_and_collect_errors(
     Returns:
         List of error messages (empty if all validations pass)
     """
-    errors = []
+    errors: List[str] = []
 
     # Validate client ID
     try:
@@ -1844,19 +1859,20 @@ def main() -> None:
     interactive_mode = not args.client_id or not args.pem_path or (not args.jwt and not args.installation_id)
 
     # Get or prompt for required inputs
-    client_id = args.client_id
-    pem_path_str = args.pem_path
-    installation_id = args.installation_id
-    pem_path = None
+    client_id: Optional[str] = args.client_id
+    pem_path_str: Optional[str] = args.pem_path
+    installation_id: Optional[str] = args.installation_id
+    pem_path: Optional[Path] = None
 
     if interactive_mode:
         # Interactive mode: validate each input immediately after entry
         if not client_id:
-            client_id = prompt_for_input(
+            client_id_input: str = prompt_for_input(
                 "Enter GitHub App Client ID: ",
                 enable_path_completion=False,
                 validator_func=lambda text: validate_client_id(text, args.force)
             )
+            client_id = client_id_input
 
         if not pem_path_str:
             # Determine flags: --no-path-completion implies --no-fuzzy
@@ -1891,13 +1907,19 @@ def main() -> None:
     else:
         # Command-line mode: collect all validation errors and report together
         # Expand path first
+        if not pem_path_str:
+            fatal_error("PEM path is required")
+
         try:
             pem_path = expand_path(pem_path_str)
         except Exception as e:
             fatal_error(f"Invalid file path '{pem_path_str}': {e}")
 
         # Validate all inputs and collect errors
-        validation_errors = validate_and_collect_errors(
+        if not client_id:
+            fatal_error("Client ID is required")
+
+        validation_errors: List[str] = validate_and_collect_errors(
             client_id=client_id,
             pem_path=pem_path,
             installation_id=installation_id,
@@ -1920,6 +1942,13 @@ def main() -> None:
     if not args.quiet:
         eprint(f"Reading private key from: {pem_path_str}")
 
+    # At this point, all required values are guaranteed to be set
+    assert client_id is not None
+    assert pem_path is not None
+    assert pem_path_str is not None
+    if not args.jwt:
+        assert installation_id is not None
+
     debug_print(f"Client ID: {client_id}", args.debug)
     if not args.jwt:
         debug_print(f"Installation ID: {installation_id}", args.debug)
@@ -1929,6 +1958,9 @@ def main() -> None:
 
     # If JWT-only mode, generate and output JWT then exit
     if args.jwt:
+        jwt_token: str
+        issued_at: int
+        expires_at: int
         jwt_token, issued_at, expires_at = generate_jwt(
             client_id=client_id,
             pem_path=pem_path,
@@ -1952,10 +1984,13 @@ def main() -> None:
         eprint(f"Generating JWT (expires in {args.jwt_expiry} seconds)...")
         eprint("Exchanging JWT for installation token...")
 
-    token_data = get_installation_token(
+    # installation_id is guaranteed to be set by assertion above
+    installation_id_str: str = installation_id  # type: ignore[assignment]
+
+    token_data: Dict[str, Any] = get_installation_token(
         client_id=client_id,
         pem_path=pem_path,
-        installation_id=installation_id,
+        installation_id=installation_id_str,
         api_url=args.api_url,
         jwt_expiry=args.jwt_expiry,
         user_agent=args.user_agent,
@@ -1969,16 +2004,16 @@ def main() -> None:
         debug_print("Successfully obtained installation token!", args.debug)
         debug_print(f"Token: {mask_token(token_data.get('token', ''))}", args.debug)
 
-        expires_at = token_data.get('expires_at', '')
-        if expires_at:
-            debug_print(f"Expires at: {expires_at}", args.debug)
+        expires_at_str: str = token_data.get('expires_at', '')
+        if expires_at_str:
+            debug_print(f"Expires at: {expires_at_str}", args.debug)
 
-        permissions = token_data.get('permissions', {})
-        if permissions:
+        permissions_dict: Dict[str, str] = token_data.get('permissions', {})
+        if permissions_dict:
             eprint("\n[DEBUG] Permissions granted:")
-            eprint(format_permissions(permissions))
+            eprint(format_permissions(permissions_dict))
 
-        repo_selection = token_data.get('repository_selection', '')
+        repo_selection: str = token_data.get('repository_selection', '')
         if repo_selection:
             debug_print(f"Repository selection: {repo_selection}", args.debug)
 
@@ -1993,9 +2028,9 @@ def main() -> None:
         if args.output_format == 'text':
             # For text format, show token and expiration in non-quiet mode
             print(f"Token: {token_data.get('token', '')}\n")
-            expires_at = token_data.get('expires_at', '')
-            if expires_at:
-                formatted_exp = format_expiration(expires_at, args.timestamp_format)
+            expires_at_final: str = token_data.get('expires_at', '')
+            if expires_at_final:
+                formatted_exp = format_expiration(expires_at_final, args.timestamp_format)
                 print(f"Expires: {formatted_exp}")
         else:
             output_token(token_data, args.output_format, False, args.timestamp_format)
