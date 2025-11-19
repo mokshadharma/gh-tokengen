@@ -1835,153 +1835,236 @@ Examples:
     return args
 
 
-def main() -> None:
-    """Main entry point."""
-    args = parse_arguments()
-
-    # Validate arguments before doing anything else
+def validate_command_line_args(args: argparse.Namespace) -> None:
+    """Validate command-line arguments."""
     try:
         validate_jwt_expiry(args.jwt_expiry)
         validate_api_url(args.api_url)
     except ValidationError as e:
         fatal_error(str(e))
 
-    # Determine if we're in interactive mode (prompting for inputs)
-    interactive_mode = not args.client_id or not args.pem_path or (not args.jwt and not args.installation_id)
 
-    # Get or prompt for required inputs
-    client_id: Optional[str] = args.client_id
-    pem_path_str: Optional[str] = args.pem_path
-    installation_id: Optional[str] = args.installation_id
-    pem_path: Optional[Path] = None
+def is_interactive_mode(args: argparse.Namespace) -> bool:
+    """Determine if we're in interactive mode."""
+    return not args.client_id or not args.pem_path or (not args.jwt and not args.installation_id)
 
-    if interactive_mode:
-        # Interactive mode: validate each input immediately after entry
-        if not client_id:
-            client_id_input: str = prompt_for_input(
-                "Enter GitHub App Client ID: ",
-                enable_path_completion=False,
-                validator_func=lambda text: validate_client_id(text, args.force)
-            )
-            client_id = client_id_input
 
-        if not pem_path_str:
-            # Determine flags: --no-path-completion implies --no-fuzzy
-            use_path_completion = not args.no_path_completion
-            use_fuzzy = not (args.no_fuzzy or args.no_path_completion)
+def prompt_for_client_id(force: bool) -> str:
+    """Prompt user for GitHub App Client ID."""
+    return prompt_for_input(
+        "Enter GitHub App Client ID: ",
+        enable_path_completion=False,
+        validator_func=lambda text: validate_client_id(text, force)
+    )
 
-            pem_path_str = prompt_for_input(
-                "Enter path to private key PEM file: ",
-                enable_path_completion=use_path_completion,
-                no_fuzzy=not use_fuzzy,
-                no_path_completion=args.no_path_completion
-            )
 
-        # Expand and validate PEM path immediately (but keep original for display)
-        try:
-            pem_path = expand_path(pem_path_str)
-        except Exception as e:
-            fatal_error(f"Invalid file path: {e}")
+def prompt_for_pem_path(no_path_completion: bool, no_fuzzy: bool) -> str:
+    """Prompt user for PEM file path."""
+    use_path_completion = not no_path_completion
+    use_fuzzy = not (no_fuzzy or no_path_completion)
 
-        try:
-            validate_pem_file(pem_path, args.force)
-        except ValidationError as e:
-            fatal_error(str(e))
+    return prompt_for_input(
+        "Enter path to private key PEM file: ",
+        enable_path_completion=use_path_completion,
+        no_fuzzy=not use_fuzzy,
+        no_path_completion=no_path_completion
+    )
 
-        # Installation ID is only needed when not in JWT-only mode
-        if not args.jwt and not installation_id:
-            installation_id = prompt_for_input(
-                "Enter Installation ID: ",
-                enable_path_completion=False,
-                validator_func=lambda text: validate_installation_id(text, args.force)
-            )
-    else:
-        # Command-line mode: collect all validation errors and report together
-        # Expand path first
-        if not pem_path_str:
-            fatal_error("PEM path is required")
 
-        try:
-            pem_path = expand_path(pem_path_str)
-        except Exception as e:
-            fatal_error(f"Invalid file path '{pem_path_str}': {e}")
+def prompt_for_installation_id(force: bool) -> str:
+    """Prompt user for Installation ID."""
+    return prompt_for_input(
+        "Enter Installation ID: ",
+        enable_path_completion=False,
+        validator_func=lambda text: validate_installation_id(text, force)
+    )
 
-        # Validate all inputs and collect errors
-        if not client_id:
-            fatal_error("Client ID is required")
 
-        validation_errors: List[str] = validate_and_collect_errors(
-            client_id=client_id,
-            pem_path=pem_path,
-            installation_id=installation_id,
-            force=args.force,
-            jwt_only=args.jwt
-        )
+def collect_inputs_interactively(args: argparse.Namespace) -> Tuple[str, Path, str, Optional[str]]:
+    """
+    Collect and validate inputs in interactive mode.
 
-        # If there are validation errors, report them all at once
-        if validation_errors:
-            eprint("Validation failed with the following error(s):\n")
-            for i, error in enumerate(validation_errors, 1):
-                # Add proper indentation for multi-line error messages
-                indented_error = error.replace('\n', '\n  ')
-                eprint(f"{i}. {indented_error}")
-                if i < len(validation_errors):
-                    eprint()  # Blank line between errors
-            sys.exit(1)
+    Returns:
+        Tuple of (client_id, pem_path, pem_path_str, installation_id)
+    """
+    client_id = args.client_id
+    if not client_id:
+        client_id = prompt_for_client_id(args.force)
 
-    # Show progress unless in quiet mode (use unexpanded path for display)
-    if not args.quiet:
-        eprint(f"Reading private key from: {pem_path_str}")
+    pem_path_str = args.pem_path
+    if not pem_path_str:
+        pem_path_str = prompt_for_pem_path(args.no_path_completion, args.no_fuzzy)
 
-    # At this point, all required values are guaranteed to be set
-    assert client_id is not None
-    assert pem_path is not None
-    assert pem_path_str is not None
-    if not args.jwt:
-        assert installation_id is not None
+    # Expand and validate PEM path
+    try:
+        pem_path = expand_path(pem_path_str)
+    except Exception as e:
+        fatal_error(f"Invalid file path: {e}")
 
+    try:
+        validate_pem_file(pem_path, args.force)
+    except ValidationError as e:
+        fatal_error(str(e))
+
+    # Installation ID only needed when not in JWT-only mode
+    installation_id = args.installation_id
+    if not args.jwt and not installation_id:
+        installation_id = prompt_for_installation_id(args.force)
+
+    return client_id, pem_path, pem_path_str, installation_id
+
+
+def collect_inputs_from_args(args: argparse.Namespace) -> Tuple[str, Path, str, Optional[str]]:
+    """
+    Collect and validate inputs from command-line arguments.
+
+    Returns:
+        Tuple of (client_id, pem_path, pem_path_str, installation_id)
+    """
+    client_id = args.client_id
+    pem_path_str = args.pem_path
+    installation_id = args.installation_id
+
+    if not pem_path_str:
+        fatal_error("PEM path is required")
+
+    if not client_id:
+        fatal_error("Client ID is required")
+
+    # Expand path
+    try:
+        pem_path = expand_path(pem_path_str)
+    except Exception as e:
+        fatal_error(f"Invalid file path '{pem_path_str}': {e}")
+
+    # Validate all inputs
+    validation_errors = validate_and_collect_errors(
+        client_id=client_id,
+        pem_path=pem_path,
+        installation_id=installation_id,
+        force=args.force,
+        jwt_only=args.jwt
+    )
+
+    if validation_errors:
+        eprint("Validation failed with the following error(s):\n")
+        for i, error in enumerate(validation_errors, 1):
+            indented_error = error.replace('\n', '\n  ')
+            eprint(f"{i}. {indented_error}")
+            if i < len(validation_errors):
+                eprint()
+        sys.exit(1)
+
+    return client_id, pem_path, pem_path_str, installation_id
+
+
+def print_debug_info(args: argparse.Namespace, client_id: str, pem_path_str: str, installation_id: Optional[str]) -> None:
+    """Print debug information."""
     debug_print(f"Client ID: {client_id}", args.debug)
-    if not args.jwt:
+    if not args.jwt and installation_id:
         debug_print(f"Installation ID: {installation_id}", args.debug)
     debug_print(f"PEM path: {pem_path_str}", args.debug)
     debug_print(f"API URL: {args.api_url}", args.debug)
     debug_print(f"User-Agent: {args.user_agent}", args.debug)
 
-    # If JWT-only mode, generate and output JWT then exit
-    if args.jwt:
-        jwt_token: str
-        issued_at: int
-        expires_at: int
-        jwt_token, issued_at, expires_at = generate_jwt(
-            client_id=client_id,
-            pem_path=pem_path,
-            expiry_seconds=args.jwt_expiry,
-            debug=args.debug
-        )
 
-        if args.debug:
-            debug_print("Successfully generated JWT!", args.debug)
-            debug_print(f"JWT: {mask_token(jwt_token)}", args.debug)
-            eprint()  # Blank line before output
-        elif not args.quiet:
-            eprint(f"Generating JWT (expires in {args.jwt_expiry} seconds)...")
-            eprint("Successfully generated JWT!\n")
+def handle_jwt_only_mode(args: argparse.Namespace, client_id: str, pem_path: Path) -> None:
+    """Generate and output JWT in JWT-only mode."""
+    jwt_token, issued_at, expires_at = generate_jwt(
+        client_id=client_id,
+        pem_path=pem_path,
+        expiry_seconds=args.jwt_expiry,
+        debug=args.debug
+    )
 
-        output_jwt(jwt_token, issued_at, expires_at, args.output_format, args.quiet)
-        return
+    if args.debug:
+        debug_print("Successfully generated JWT!", args.debug)
+        debug_print(f"JWT: {mask_token(jwt_token)}", args.debug)
+        eprint()
+    elif not args.quiet:
+        eprint(f"Generating JWT (expires in {args.jwt_expiry} seconds)...")
+        eprint("Successfully generated JWT!\n")
 
-    # Get installation token
+    output_jwt(jwt_token, issued_at, expires_at, args.output_format, args.quiet)
+
+
+def show_progress_messages(args: argparse.Namespace) -> None:
+    """Show progress messages for token generation."""
     if not args.quiet and not args.debug:
         eprint(f"Generating JWT (expires in {args.jwt_expiry} seconds)...")
         eprint("Exchanging JWT for installation token...")
 
-    # installation_id is guaranteed to be set by assertion above
-    installation_id_str: str = installation_id  # type: ignore[assignment]
 
-    token_data: Dict[str, Any] = get_installation_token(
+def show_token_success_info(args: argparse.Namespace, token_data: Dict[str, Any]) -> None:
+    """Show success information after obtaining token."""
+    if args.debug:
+        debug_print("Successfully obtained installation token!", args.debug)
+        debug_print(f"Token: {mask_token(token_data.get('token', ''))}", args.debug)
+
+        expires_at_str = token_data.get('expires_at', '')
+        if expires_at_str:
+            debug_print(f"Expires at: {expires_at_str}", args.debug)
+
+        permissions_dict = token_data.get('permissions', {})
+        if permissions_dict:
+            eprint("\n[DEBUG] Permissions granted:")
+            eprint(format_permissions(permissions_dict))
+
+        repo_selection = token_data.get('repository_selection', '')
+        if repo_selection:
+            debug_print(f"Repository selection: {repo_selection}", args.debug)
+
+        eprint()
+    elif not args.quiet:
+        eprint("Successfully obtained installation token!\n")
+
+
+def output_installation_token(args: argparse.Namespace, token_data: Dict[str, Any]) -> None:
+    """Output the installation token in the requested format."""
+    if args.quiet:
+        output_token(token_data, args.output_format, True, args.timestamp_format)
+    else:
+        if args.output_format == 'text':
+            print(f"Token: {token_data.get('token', '')}\n")
+            expires_at = token_data.get('expires_at', '')
+            if expires_at:
+                formatted_exp = format_expiration(expires_at, args.timestamp_format)
+                print(f"Expires: {formatted_exp}")
+        else:
+            output_token(token_data, args.output_format, False, args.timestamp_format)
+
+
+def main() -> None:
+    """Main entry point - orchestrates token generation workflow."""
+    args = parse_arguments()
+    validate_command_line_args(args)
+
+    # Collect required inputs
+    if is_interactive_mode(args):
+        client_id, pem_path, pem_path_str, installation_id = collect_inputs_interactively(args)
+    else:
+        client_id, pem_path, pem_path_str, installation_id = collect_inputs_from_args(args)
+
+    # Show progress
+    if not args.quiet:
+        eprint(f"Reading private key from: {pem_path_str}")
+
+    print_debug_info(args, client_id, pem_path_str, installation_id)
+
+    # Handle JWT-only mode
+    if args.jwt:
+        handle_jwt_only_mode(args, client_id, pem_path)
+        return
+
+    # Generate installation token
+    assert installation_id is not None  # Guaranteed by collect_inputs functions
+
+    show_progress_messages(args)
+
+    token_data = get_installation_token(
         client_id=client_id,
         pem_path=pem_path,
-        installation_id=installation_id_str,
+        installation_id=installation_id,
         api_url=args.api_url,
         jwt_expiry=args.jwt_expiry,
         user_agent=args.user_agent,
@@ -1990,41 +2073,8 @@ def main() -> None:
         dry_run=args.dry_run
     )
 
-    # Show success message and permissions in debug mode
-    if args.debug:
-        debug_print("Successfully obtained installation token!", args.debug)
-        debug_print(f"Token: {mask_token(token_data.get('token', ''))}", args.debug)
-
-        expires_at_str: str = token_data.get('expires_at', '')
-        if expires_at_str:
-            debug_print(f"Expires at: {expires_at_str}", args.debug)
-
-        permissions_dict: Dict[str, str] = token_data.get('permissions', {})
-        if permissions_dict:
-            eprint("\n[DEBUG] Permissions granted:")
-            eprint(format_permissions(permissions_dict))
-
-        repo_selection: str = token_data.get('repository_selection', '')
-        if repo_selection:
-            debug_print(f"Repository selection: {repo_selection}", args.debug)
-
-        eprint()  # Blank line before output
-    elif not args.quiet:
-        eprint("Successfully obtained installation token!\n")
-
-    # Output token
-    if args.quiet:
-        output_token(token_data, args.output_format, True, args.timestamp_format)
-    else:
-        if args.output_format == 'text':
-            # For text format, show token and expiration in non-quiet mode
-            print(f"Token: {token_data.get('token', '')}\n")
-            expires_at_final: str = token_data.get('expires_at', '')
-            if expires_at_final:
-                formatted_exp = format_expiration(expires_at_final, args.timestamp_format)
-                print(f"Expires: {formatted_exp}")
-        else:
-            output_token(token_data, args.output_format, False, args.timestamp_format)
+    show_token_success_info(args, token_data)
+    output_installation_token(args, token_data)
 
 
 if __name__ == '__main__':
