@@ -282,13 +282,22 @@ def generate_jwt(
         from cryptography.hazmat.primitives.asymmetric import rsa
         from cryptography.hazmat.backends import default_backend
         import jwt as pyjwt
+        from typing import cast
 
         # Read private key
         with open(pem_path, 'rb') as key_file:
-            private_key = serialization.load_pem_private_key(
-                key_file.read(),
-                password=None,
-                backend=default_backend()
+            # Cast to RSAPrivateKey to satisfy PyJWT's type hints.
+            # load_pem_private_key() returns a PrivateKeyTypes union that includes key types
+            # PyJWT doesn't accept (like DHPrivateKey), but GitHub Apps always use RSA keys.
+            # See: https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps
+            # This cast tells the type checker we're confident this is an RSA key.
+            private_key = cast(
+                rsa.RSAPrivateKey,
+                serialization.load_pem_private_key(
+                    key_file.read(),
+                    password=None,
+                    backend=default_backend()
+                )
             )
 
         # Generate JWT
