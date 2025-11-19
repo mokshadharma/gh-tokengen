@@ -1599,7 +1599,7 @@ def prompt_for_input(
             session.default_buffer.on_text_changed += on_text_changed
 
         # Add auto-expansion handler for path completion
-        if enable_path_completion:
+        if enable_path_completion and completer:
             def on_text_changed(_):
                 """Auto-expand single directory matches (but not ~)."""
                 buf = session.default_buffer
