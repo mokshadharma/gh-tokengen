@@ -537,7 +537,7 @@ def output_token(
             now: datetime = datetime.now(timezone.utc)
             expires_in: int = int((exp_dt - now).total_seconds())
             output['expires_in_seconds'] = expires_in
-        except:
+        except (ValueError, AttributeError, TypeError):
             pass
 
         print(json.dumps(output, indent=2))
