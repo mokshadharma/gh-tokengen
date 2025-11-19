@@ -995,7 +995,6 @@ def prompt_for_input(
         from prompt_toolkit.formatted_text import HTML
         from prompt_toolkit.key_binding import KeyBindings
         from prompt_toolkit.keys import Keys
-        from prompt_toolkit.document import Document
         import os
         import threading
         import time
