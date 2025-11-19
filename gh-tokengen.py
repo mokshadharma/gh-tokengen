@@ -1071,7 +1071,7 @@ def prompt_for_input(
 
                             # Check if readable
                             try:
-                                with open(path, 'r') as f:
+                                with open(path, 'r'):
                                     pass
                             except (PermissionError, OSError):
                                 state.error_message = "file is not readable"
