@@ -310,12 +310,17 @@ def generate_jwt(
 
         return token, payload['iat'], payload['exp']
 
-    except ImportError:
+    except ImportError as e:
+        if debug:
+            eprint(f"ImportError: {e}")
         fatal_error(
             "Required dependencies not found. Install with:\n"
             "  pip install PyJWT cryptography"
         )
     except Exception as e:
+        if debug:
+            import traceback
+            traceback.print_exc()
         fatal_error(f"Failed to generate JWT: {e}")
 
 
@@ -386,6 +391,10 @@ def make_api_request(
 
     except HTTPError as e:
         error_body = e.read().decode('utf-8')
+        if debug:
+            eprint(f"DEBUG: HTTP Error body: {error_body}")
+            import traceback
+            traceback.print_exc()
         try:
             error_data = json.loads(error_body)
             error_msg = error_data.get('message', error_body)
@@ -393,8 +402,14 @@ def make_api_request(
             error_msg = error_body
         fatal_error(f"HTTP {e.code} error from GitHub API: {error_msg}")
     except URLError as e:
+        if debug:
+            import traceback
+            traceback.print_exc()
         fatal_error(f"Failed to connect to GitHub API: {e.reason}")
     except Exception as e:
+        if debug:
+            import traceback
+            traceback.print_exc()
         fatal_error(f"Unexpected error during API request: {e}")
 
 
