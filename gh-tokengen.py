@@ -1383,7 +1383,6 @@ def prompt_for_input(
                 # Track if path started with ~ or $HOME for preserving it
                 starts_with_tilde: bool = text.startswith('~/')
                 starts_with_home: bool = text.startswith('$HOME/')
-                starts_with_bare_tilde: bool = text == '~'
 
                 # Parse the path
                 if '/' in text:
