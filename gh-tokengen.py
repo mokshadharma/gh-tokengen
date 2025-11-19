@@ -1484,9 +1484,9 @@ def prompt_for_input(
                             # Fuzzy mode: use best match
                             from rapidfuzz import fuzz, process
                             names = [c.name for c in matching_items]
-                            matches: List[Tuple[str, float, int]] = process.extract(text, names, scorer=fuzz.QRatio, limit=1)
-                            if matches:
-                                best_name = matches[0][0]
+                            fuzzy_matches: List[Tuple[str, float, int]] = process.extract(text, names, scorer=fuzz.QRatio, limit=1)
+                            if fuzzy_matches:
+                                best_name = fuzzy_matches[0][0]
                                 matched = next(c for c in matching_items if c.name == best_name)
                                 return (matched.name, str(matched))
 
