@@ -406,7 +406,7 @@ def make_api_request(
         try:
             error_data = json.loads(error_body)
             error_msg = error_data.get('message', error_body)
-        except:
+        except (json.JSONDecodeError, ValueError):
             error_msg = error_body
         fatal_error(f"HTTP {e.code} error from GitHub API: {error_msg}")
     except URLError as e:
