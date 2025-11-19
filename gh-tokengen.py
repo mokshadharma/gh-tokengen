@@ -1016,7 +1016,7 @@ def prompt_for_input(
 
         # Shared state for error display and yank buffer
         class ValidationState:
-            def __init__(self):
+            def __init__(self) -> None:
                 self.error_message: str = ""
                 self.flash_error: bool = False
                 self.flash_thread: Optional[threading.Thread] = None
@@ -1025,7 +1025,7 @@ def prompt_for_input(
         state = ValidationState()
 
         # Bottom toolbar for error messages
-        def bottom_toolbar():
+        def bottom_toolbar() -> Any:
             if state.flash_error:
                 # Flashing: black text on red background
                 return HTML('<style bg="ansired" fg="ansiblack">  {}  </style>').format(state.error_message)
@@ -1036,7 +1036,7 @@ def prompt_for_input(
 
         # Validator for inputs
         class InputValidator(Validator):
-            def validate(self, document):
+            def validate(self, document: Any) -> None:
                 text = document.text.strip()
 
                 # Clear error message at the start of validation
@@ -1272,7 +1272,7 @@ def prompt_for_input(
         kb = KeyBindings()
 
         @kb.add(Keys.Backspace)
-        def handle_backspace(event):
+        def handle_backspace(event: Any) -> None:
             """Handle backspace - keep completions visible."""
             buf = event.app.current_buffer
             if buf.cursor_position > 0:
@@ -1282,7 +1282,7 @@ def prompt_for_input(
                     buf.start_completion(select_first=False)
 
         @kb.add(Keys.ControlW)
-        def handle_ctrl_w(event):
+        def handle_ctrl_w(event: Any) -> None:
             """Handle Ctrl-W (delete word) - keep completions visible and save to yank buffer."""
             buf = event.app.current_buffer
             # Delete word before cursor (standard behavior)
@@ -1316,7 +1316,7 @@ def prompt_for_input(
                     buf.start_completion(select_first=False)
 
         @kb.add(Keys.ControlU)
-        def handle_ctrl_u(event):
+        def handle_ctrl_u(event: Any) -> None:
             """Handle Ctrl-U (delete from beginning of line to cursor) - save to yank buffer."""
             buf = event.app.current_buffer
             if buf.cursor_position > 0:
@@ -1334,7 +1334,7 @@ def prompt_for_input(
                     buf.start_completion(select_first=False)
 
         @kb.add(Keys.ControlY)
-        def handle_ctrl_y(event):
+        def handle_ctrl_y(event: Any) -> None:
             """Handle Ctrl-Y (yank/paste) - paste back last deleted text."""
             buf = event.app.current_buffer
             if state.yank_buffer:
@@ -1495,7 +1495,7 @@ def prompt_for_input(
                 return None
 
         @kb.add(Keys.ControlM)  # Enter key
-        def handle_enter(event):
+        def handle_enter(event: Any) -> None:
             """Handle Enter key - validate before accepting."""
             buf = event.app.current_buffer
             text = buf.text.strip()
@@ -1561,7 +1561,7 @@ def prompt_for_input(
             buf.validate_and_handle()
 
         @kb.add(Keys.ControlI)  # Tab key
-        def handle_tab(event):
+        def handle_tab(event: Any) -> None:
             """Handle Tab key - show completions or flash error."""
             buf = event.app.current_buffer
 
@@ -1569,7 +1569,7 @@ def prompt_for_input(
                 # Flash the error
                 state.flash_error = True
 
-                def unflash():
+                def unflash() -> None:
                     time.sleep(0.5)
                     state.flash_error = False
                     event.app.invalidate()
@@ -1598,7 +1598,7 @@ def prompt_for_input(
 
         # In no_path_completion mode, clear errors when text changes (only validate on Enter)
         if no_path_completion:
-            def on_text_changed(_):
+            def on_text_changed(_: Any) -> None:
                 """Clear error message when user types (will validate again on Enter)."""
                 state.error_message = ""
 
@@ -1606,7 +1606,7 @@ def prompt_for_input(
 
         # Add auto-expansion handler for path completion
         if enable_path_completion and completer:
-            def on_text_changed(_):
+            def on_text_changed(_: Any) -> None:
                 """Auto-expand single directory matches (but not ~)."""
                 buf = session.default_buffer
                 text = buf.text
