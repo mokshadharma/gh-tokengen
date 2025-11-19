@@ -448,7 +448,7 @@ def format_expiration(
             minutes: int = int(delta.total_seconds() / 60)
             return f"in {minutes} minutes"
         else:  # human (default)
-            now_utc: datetime = datetime.now(timezone.utc)
+            now_utc = datetime.now(timezone.utc)
             delta_time: timedelta = exp_dt - now_utc
             minutes_left: int = int(delta_time.total_seconds() / 60)
             formatted_time: str = exp_dt.strftime('%Y-%m-%d %H:%M:%S UTC')
