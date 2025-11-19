@@ -17,14 +17,10 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, NoReturn, Callable, List, Union, Iterator
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse, ParseResult
+from urllib.parse import urlparse
 import base64
-import hashlib
-import hmac
-import os
 import re
 import threading
-import traceback
 
 __version__ = "1.0.0"
 
@@ -315,7 +311,7 @@ def generate_jwt(
 
         if debug:
             exp_time: datetime = datetime.fromtimestamp(payload['exp'], tz=timezone.utc)  # type: ignore[arg-type]
-            debug_print(f"JWT generated successfully", debug)
+            debug_print("JWT generated successfully", debug)
             debug_print(f"JWT issued at: {datetime.fromtimestamp(payload['iat'], tz=timezone.utc)}", debug)  # type: ignore[arg-type]
             debug_print(f"JWT expires at: {exp_time}", debug)
             debug_print(f"JWT preview: {token[:20]}...{token[-20:]}", debug)
@@ -596,8 +592,8 @@ def get_installation_token(
     if dry_run:
         eprint("\n[DRY RUN] Would make the following API request:")
         eprint(f"  URL: {endpoint}")
-        eprint(f"  Method: POST")
-        eprint(f"  Headers:")
+        eprint("  Method: POST")
+        eprint("  Headers:")
         headers: Dict[str, str] = {
             'Authorization': f'Bearer {jwt_token}',
             'Accept': 'application/vnd.github+json',
@@ -1268,7 +1264,7 @@ def prompt_for_input(
 
                     except PTValidationError:
                         raise
-                    except Exception as e:
+                    except Exception:
                         # Unexpected error - allow typing to continue
                         pass
                 # Non-path validation is handled in the Enter key binding
