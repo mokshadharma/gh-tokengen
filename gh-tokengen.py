@@ -1461,20 +1461,20 @@ def prompt_for_input(
                 else:
                     # No slash - match in current directory
                     base_dir: Path = Path(os.getcwd())
-                    candidates: List[Path] = []
+                    candidate_items: List[Path] = []
 
                     if base_dir.exists():
                         for item in base_dir.iterdir():
                             if item.is_dir() or (item.is_file() and item.suffix == '.pem'):
-                                candidates.append(item)
+                                candidate_items.append(item)
 
                     # Try exact match first
-                    for candidate in candidates:
+                    for candidate in candidate_items:
                         if candidate.name == text:
                             return (text, str(candidate))
 
                     # Try matching based on mode
-                    matching_candidates: List[Path] = [c for c in candidates if matches_query(text, c.name)]
+                    matching_candidates: List[Path] = [c for c in candidate_items if matches_query(text, c.name)]
                     if matching_candidates:
                         if no_fuzzy:
                             # Prefix mode: use first match
