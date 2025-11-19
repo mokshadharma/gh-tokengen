@@ -37,7 +37,7 @@ The tool includes a wrapper script that automatically manages the Python virtual
 **Using uv (recommended):**
 ```bash
 uv venv
-uv pip install -e .
+uv pip install --python .venv -e .
 ```
 
 **Using standard Python:**
