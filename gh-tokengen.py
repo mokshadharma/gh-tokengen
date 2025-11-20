@@ -1034,237 +1034,289 @@ def prompt_for_input(
                 return HTML('<style fg="ansired">  {}  </style>').format(state.error_message)
             return ""
 
+        # Helper functions for validation logic
+        def clear_error_state() -> None:
+            """Clear error message at the start of validation."""
+            state.error_message = ""
+
+        def check_if_text_empty(text: str) -> bool:
+            """Check if text is empty (validation should be skipped)."""
+            return not text
+
+        def expand_home_in_path(text: str) -> Path:
+            """Expand $HOME and ~ in path string."""
+            expanded = text.replace('$HOME', str(Path.home()))
+            return Path(expanded).expanduser()
+
+        def make_path_absolute_from_cwd(path: Path) -> Path:
+            """Make path absolute if relative, using current working directory."""
+            return path if path.is_absolute() else Path(os.getcwd()) / path
+
+        def raise_validation_error_with_state(message: str) -> NoReturn:
+            """Set error state and raise validation error (never returns)."""
+            state.error_message = message
+            raise PTValidationError(message=message)
+
+        def validate_path_exists_or_fail(path: Path) -> None:
+            """Validate that path exists, raise error if not."""
+            if not path.exists():
+                raise_validation_error_with_state("file does not exist")
+
+        def validate_path_is_file_or_fail(path: Path) -> None:
+            """Validate that path is a regular file, raise error if not."""
+            if not path.is_file():
+                raise_validation_error_with_state("not a regular file")
+
+        def validate_path_is_readable_or_fail(path: Path) -> None:
+            """Validate that path is readable, raise error if not."""
+            try:
+                with open(path, 'r'):
+                    pass
+            except (PermissionError, OSError):
+                raise_validation_error_with_state("file is not readable")
+
+        def perform_no_path_completion_validation(expanded_path: Path) -> None:
+            """Complete validation workflow for no_path_completion mode."""
+            absolute_path = make_path_absolute_from_cwd(expanded_path)
+            validate_path_exists_or_fail(absolute_path)
+            validate_path_is_file_or_fail(absolute_path)
+            validate_path_is_readable_or_fail(absolute_path)
+
+        def determine_base_directory_for_text(text: str) -> Path:
+            """Determine the base directory based on text prefix."""
+            if text.startswith('/'):
+                return Path('/')
+            elif text.startswith('~/') or text.startswith('$HOME/'):
+                return Path.home()
+            else:
+                return Path(os.getcwd())
+
+        def has_ordered_characters_match(query_str: str, target_str: str) -> bool:
+            """Check if query characters appear in order in target (case-insensitive)."""
+            query_lower = query_str.lower()
+            target_lower = target_str.lower()
+            query_idx = 0
+            for char in target_lower:
+                if query_idx < len(query_lower) and char == query_lower[query_idx]:
+                    query_idx += 1
+            return query_idx == len(query_lower)
+
+        def find_prefix_matches_case_sensitive(query: str, candidates: List[Path]) -> List[Path]:
+            """Find candidates matching query prefix with case sensitivity."""
+            return [c for c in candidates if c.name.startswith(query)]
+
+        def find_prefix_matches_case_insensitive(query: str, candidates: List[Path]) -> List[Path]:
+            """Find candidates matching query prefix without case sensitivity."""
+            query_lower = query.lower()
+            return [c for c in candidates if c.name.lower().startswith(query_lower)]
+
+        def select_prefix_matching_strategy(query: str, candidates: List[Path]) -> List[Path]:
+            """Select and apply prefix matching strategy based on query case."""
+            query_has_upper = any(c.isupper() for c in query)
+            if query_has_upper:
+                return find_prefix_matches_case_sensitive(query, candidates)
+            else:
+                return find_prefix_matches_case_insensitive(query, candidates)
+
+        def find_fuzzy_matches(query: str, candidates: List[Path]) -> List[Path]:
+            """Find candidates matching query using fuzzy (ordered characters) matching."""
+            return [c for c in candidates if has_ordered_characters_match(query, c.name)]
+
+        def apply_matching_strategy(query: str, candidates: List[Path]) -> List[Path]:
+            """Apply appropriate matching strategy (prefix or fuzzy) based on mode."""
+            if no_fuzzy:
+                return select_prefix_matching_strategy(query, candidates)
+            else:
+                return find_fuzzy_matches(query, candidates)
+
+        def find_exact_directory_match(part: str, subdirs: List[Path]) -> Optional[Path]:
+            """Find exact name match in subdirectory list."""
+            for subdir in subdirs:
+                if subdir.name == part:
+                    return subdir
+            return None
+
+        def find_first_matching_directory(part: str, subdirs: List[Path]) -> Optional[Path]:
+            """Find first matching subdirectory using current matching strategy."""
+            matches = apply_matching_strategy(part, subdirs)
+            if matches:
+                return matches[0]
+            else:
+                return None
+
+        def resolve_directory_segment(part: str, subdirs: List[Path]) -> Optional[Path]:
+            """Resolve a single directory path segment to a matched directory."""
+            exact = find_exact_directory_match(part, subdirs)
+            if exact:
+                return exact
+            else:
+                return find_first_matching_directory(part, subdirs)
+
+        def get_subdirectories_from_path(current_dir: Path) -> List[Path]:
+            """Get list of subdirectories from path, empty list if path doesn't exist."""
+            if current_dir.exists():
+                return [p for p in current_dir.iterdir() if p.is_dir()]
+            else:
+                return []
+
+        def check_skip_directory_part(i: int, part: str) -> bool:
+            """Determine if directory part should be skipped during navigation."""
+            if not part:
+                return True
+            if i == 0 and part in ('~', '$HOME'):
+                return True
+            return False
+
+        def validate_directory_exists_for_query_or_fail(current_dir: Path, final_query: str) -> None:
+            """Validate directory exists when there's a final query to match."""
+            if not current_dir.exists() and final_query:
+                raise_validation_error_with_state("no match")
+
+        def validate_match_found_for_query_or_fail(matched: Optional[Path], final_query: str) -> None:
+            """Validate that a match was found when there's a final query."""
+            if not matched and final_query:
+                raise_validation_error_with_state("no match")
+
+        def navigate_one_directory_segment(i: int, part: str, current_dir: Path, final_query: str) -> Path:
+            """Navigate through one directory segment, returning updated current directory."""
+            if check_skip_directory_part(i, part):
+                return current_dir
+
+            validate_directory_exists_for_query_or_fail(current_dir, final_query)
+            subdirs = get_subdirectories_from_path(current_dir)
+            matched = resolve_directory_segment(part, subdirs)
+            validate_match_found_for_query_or_fail(matched, final_query)
+            if matched:
+                return matched
+            else:
+                return current_dir
+
+        def navigate_through_directory_parts(dir_parts: List[str], base_dir: Path, final_query: str) -> Path:
+            """Navigate through all directory parts, returning final directory."""
+            current_dir = base_dir
+            for i, part in enumerate(dir_parts):
+                current_dir = navigate_one_directory_segment(i, part, current_dir, final_query)
+            return current_dir
+
+        def get_path_validation_candidates_or_fail(current_dir: Path) -> List[Path]:
+            """Get list of validation candidates (directories and .pem files) from directory."""
+            try:
+                return [item for item in current_dir.iterdir()
+                       if item.is_dir() or (item.is_file() and item.suffix == '.pem')]
+            except PermissionError:
+                raise_validation_error_with_state("no match")
+
+        def validate_directory_exists_or_fail(current_dir: Path) -> None:
+            """Validate directory exists, raise 'no match' error if not."""
+            if not current_dir.exists():
+                raise_validation_error_with_state("no match")
+
+        def validate_candidates_not_empty_or_fail(candidates: List[Path]) -> None:
+            """Validate that candidates list is not empty, raise error if empty."""
+            if not candidates:
+                raise_validation_error_with_state("no match")
+
+        def validate_query_has_match_or_fail(query: str, candidates: List[Path]) -> None:
+            """Validate that query matches at least one candidate, raise error if not."""
+            matches = apply_matching_strategy(query, candidates)
+            if not matches:
+                raise_validation_error_with_state("no match")
+
+        def validate_final_query_segment(final_query: str, current_dir: Path) -> None:
+            """Validate final query segment against candidates in directory."""
+            validate_directory_exists_or_fail(current_dir)
+            candidates = get_path_validation_candidates_or_fail(current_dir)
+            validate_candidates_not_empty_or_fail(candidates)
+            validate_query_has_match_or_fail(final_query, candidates)
+
+        def parse_path_components(text: str) -> Tuple[List[str], str]:
+            """Parse path into directory parts and final query segment."""
+            parts = text.split('/')
+            return parts[:-1], parts[-1]
+
+        def validate_final_query_if_present(final_query: str, current_dir: Path) -> None:
+            """Validate final query segment if it's not empty."""
+            if final_query:
+                validate_final_query_segment(final_query, current_dir)
+
+        def validate_multi_segment_path(text: str, base_dir: Path) -> None:
+            """Validate a path containing directory separators."""
+            dir_parts, final_query = parse_path_components(text)
+            current_dir = navigate_through_directory_parts(dir_parts, base_dir, final_query)
+            validate_final_query_if_present(final_query, current_dir)
+
+        def check_if_special_home_marker(text: str) -> bool:
+            """Check if text is a special home directory marker."""
+            return text in ('~', '$HOME')
+
+        def validate_non_special_single_segment(text: str, base_dir: Path) -> None:
+            """Validate single segment path that is not a special marker."""
+            validate_directory_exists_or_fail(base_dir)
+            candidates = get_path_validation_candidates_or_fail(base_dir)
+            validate_candidates_not_empty_or_fail(candidates)
+            validate_query_has_match_or_fail(text, candidates)
+
+        def validate_single_segment_path(text: str, base_dir: Path) -> None:
+            """Validate a simple path with no directory separators."""
+            if check_if_special_home_marker(text):
+                return
+            validate_non_special_single_segment(text, base_dir)
+
+        def dispatch_path_validation_by_structure(text: str, base_dir: Path) -> None:
+            """Dispatch to appropriate validation based on path structure."""
+            if '/' in text:
+                validate_multi_segment_path(text, base_dir)
+            else:
+                validate_single_segment_path(text, base_dir)
+
+        def perform_path_completion_validation(text: str) -> None:
+            """Complete validation workflow for path completion mode."""
+            base_dir = determine_base_directory_for_text(text)
+            dispatch_path_validation_by_structure(text, base_dir)
+
+        def dispatch_validation_by_completion_mode(expanded_path: Path, text: str) -> None:
+            """Dispatch to appropriate validation handler based on completion mode."""
+            if no_path_completion:
+                perform_no_path_completion_validation(expanded_path)
+            else:
+                perform_path_completion_validation(text)
+
+        def execute_path_validation_with_exception_handling(text: str) -> None:
+            """Execute path validation with proper exception handling."""
+            try:
+                expanded_path = expand_home_in_path(text)
+                dispatch_validation_by_completion_mode(expanded_path, text)
+            except PTValidationError:
+                raise
+            except Exception:
+                pass
+
+        def check_if_path_validation_enabled() -> bool:
+            """Check if path validation is enabled in current mode."""
+            return enable_path_completion or no_path_completion
+
+        def dispatch_validation_by_mode(text: str) -> None:
+            """Dispatch validation based on whether path validation is enabled."""
+            if check_if_path_validation_enabled():
+                execute_path_validation_with_exception_handling(text)
+
+        def execute_validation_workflow(text: str) -> None:
+            """Execute the complete validation workflow based on mode."""
+            dispatch_validation_by_mode(text)
+
+        def handle_empty_text_or_validate(text: str) -> None:
+            """Handle empty text case or proceed with validation."""
+            if check_if_text_empty(text):
+                return
+            execute_validation_workflow(text)
+
         # Validator for inputs
         class InputValidator(Validator):
             def validate(self, document: Any) -> None:
+                """Validate input according to current mode and configuration."""
                 text = document.text.strip()
-
-                # Clear error message at the start of validation
-                # It will be set again if there's an error
-                state.error_message = ""
-
-                if enable_path_completion or no_path_completion:
-                    # Path validation (with or without completion)
-                    if not text:
-                        return
-
-                    # Expand path for validation
-                    try:
-                        expanded = text.replace('$HOME', str(Path.home()))
-                        path = Path(expanded).expanduser()
-
-                        # In no_path_completion mode, validate file exists and is readable immediately
-                        if no_path_completion:
-                            # Make path absolute if relative
-                            if not path.is_absolute():
-                                path = Path(os.getcwd()) / path
-
-                            # Check if exists
-                            if not path.exists():
-                                state.error_message = "file does not exist"
-                                raise PTValidationError(message="file does not exist")
-
-                            # Check if it's a regular file
-                            if not path.is_file():
-                                state.error_message = "not a regular file"
-                                raise PTValidationError(message="not a regular file")
-
-                            # Check if readable
-                            try:
-                                with open(path, 'r'):
-                                    pass
-                            except (PermissionError, OSError):
-                                state.error_message = "file is not readable"
-                                raise PTValidationError(message="file is not readable")
-
-                            # Valid file
-                            return
-
-                        # Determine base directory
-                        if text.startswith('/'):
-                            base_dir = Path('/')
-                        elif text.startswith('~/') or text.startswith('$HOME/'):
-                            base_dir = Path.home()
-                        else:
-                            base_dir = Path(os.getcwd())
-
-                        # Parse path into components
-                        if '/' in text:
-                            parts = text.split('/')
-                            final_query = parts[-1]
-                            dir_parts = parts[:-1]
-
-                            # Build directory path
-                            current_dir = base_dir
-
-                            # Navigate through directory parts
-                            for i, part in enumerate(dir_parts):
-                                if not part:
-                                    if i == 0 and text.startswith('/'):
-                                        current_dir = Path('/')
-                                    continue
-
-                                if i == 0 and part in ('~', '$HOME'):
-                                    current_dir = Path.home()
-                                    continue
-
-                                # Get subdirectories
-                                if not current_dir.exists():
-                                    if final_query:
-                                        state.error_message = "no match"
-                                        raise PTValidationError(message="no match")
-                                    return
-
-                                subdirs = [p for p in current_dir.iterdir() if p.is_dir()] if current_dir.exists() else []
-
-                                # Try exact match first
-                                matched = None
-                                for subdir in subdirs:
-                                    if subdir.name == part:
-                                        matched = subdir
-                                        break
-
-                                # If no exact match, try fuzzy match using ordered characters
-                                if not matched:
-                                    if no_fuzzy:
-                                        # Prefix-only matching with case rules
-                                        part_has_upper = any(c.isupper() for c in part)
-                                        if part_has_upper:
-                                            # Case-sensitive
-                                            prefix_matches = [s for s in subdirs if s.name.startswith(part)]
-                                        else:
-                                            # Case-insensitive
-                                            part_lower = part.lower()
-                                            prefix_matches = [s for s in subdirs if s.name.lower().startswith(part_lower)]
-
-                                        if prefix_matches:
-                                            matched = prefix_matches[0]
-                                    else:
-                                        # Fuzzy matching
-                                        def has_ordered_chars(query_str: str, target_str: str) -> bool:
-                                            query_lower = query_str.lower()
-                                            target_lower = target_str.lower()
-                                            query_idx = 0
-                                            for char in target_lower:
-                                                if query_idx < len(query_lower) and char == query_lower[query_idx]:
-                                                    query_idx += 1
-                                            return query_idx == len(query_lower)
-
-                                        # Find subdirs that match
-                                        fuzzy_matches = [s for s in subdirs if has_ordered_chars(part, s.name)]
-                                        if fuzzy_matches:
-                                            # Use the first fuzzy match (could score and sort, but keep it simple)
-                                            matched = fuzzy_matches[0]
-
-                                if matched:
-                                    current_dir = matched
-                                else:
-                                    # No match at all - this is an error if final_query exists
-                                    if final_query:
-                                        state.error_message = "no match"
-                                        raise PTValidationError(message="no match")
-                                    return
-
-                            # Check final segment if present
-                            if final_query:
-                                # Get candidates in current directory
-                                if not current_dir.exists():
-                                    state.error_message = "no match"
-                                    raise PTValidationError(message="no match")
-
-                                candidates = []
-                                try:
-                                    for item in current_dir.iterdir():
-                                        if item.is_dir() or (item.is_file() and item.suffix == '.pem'):
-                                            candidates.append(item)
-                                except PermissionError:
-                                    state.error_message = "no match"
-                                    raise PTValidationError(message="no match")
-
-                                if not candidates:
-                                    state.error_message = "no match"
-                                    raise PTValidationError(message="no match")
-
-                                # Check if any candidate matches
-                                if no_fuzzy:
-                                    # Prefix-only matching
-                                    final_has_upper = any(c.isupper() for c in final_query)
-                                    if final_has_upper:
-                                        has_match = any(c.name.startswith(final_query) for c in candidates)
-                                    else:
-                                        final_lower = final_query.lower()
-                                        has_match = any(c.name.lower().startswith(final_lower) for c in candidates)
-                                else:
-                                    # Fuzzy matching
-                                    def has_ordered_chars(query_str: str, target_str: str) -> bool:
-                                        query_lower = query_str.lower()
-                                        target_lower = target_str.lower()
-                                        query_idx = 0
-                                        for char in target_lower:
-                                            if query_idx < len(query_lower) and char == query_lower[query_idx]:
-                                                query_idx += 1
-                                        return query_idx == len(query_lower)
-
-                                    has_match = any(has_ordered_chars(final_query, c.name) for c in candidates)
-
-                                if not has_match:
-                                    state.error_message = "no match"
-                                    raise PTValidationError(message="no match")
-                        else:
-                            # No slash - check in base directory
-                            # Special case: ~ or $HOME are always valid (they're directories)
-                            if text in ('~', '$HOME'):
-                                return
-
-                            if not base_dir.exists():
-                                state.error_message = "no match"
-                                raise PTValidationError(message="no match")
-
-                            candidates = []
-                            try:
-                                for item in base_dir.iterdir():
-                                    if item.is_dir() or (item.is_file() and item.suffix == '.pem'):
-                                        candidates.append(item)
-                            except PermissionError:
-                                state.error_message = "no match"
-                                raise PTValidationError(message="no match")
-
-                            if not candidates:
-                                state.error_message = "no match"
-                                raise PTValidationError(message="no match")
-
-                            # Check if any candidate matches
-                            if no_fuzzy:
-                                # Prefix-only matching
-                                text_has_upper = any(c.isupper() for c in text)
-                                if text_has_upper:
-                                    has_match = any(c.name.startswith(text) for c in candidates)
-                                else:
-                                    text_lower = text.lower()
-                                    has_match = any(c.name.lower().startswith(text_lower) for c in candidates)
-                            else:
-                                # Fuzzy matching
-                                def has_ordered_chars(query_str: str, target_str: str) -> bool:
-                                    query_lower = query_str.lower()
-                                    target_lower = target_str.lower()
-                                    query_idx = 0
-                                    for char in target_lower:
-                                        if query_idx < len(query_lower) and char == query_lower[query_idx]:
-                                            query_idx += 1
-                                    return query_idx == len(query_lower)
-
-                                has_match = any(has_ordered_chars(text, c.name) for c in candidates)
-
-                            if not has_match:
-                                state.error_message = "no match"
-                                raise PTValidationError(message="no match")
-
-                    except PTValidationError:
-                        raise
-                    except Exception:
-                        # Unexpected error - allow typing to continue
-                        pass
-                # Non-path validation is handled in the Enter key binding
+                clear_error_state()
+                handle_empty_text_or_validate(text)
 
         validator = InputValidator()
 
