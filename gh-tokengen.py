@@ -656,6 +656,9 @@ class FuzzyPemCompleter:
         from rapidfuzz import fuzz, process
         self.fuzz: Any = fuzz
         self.process: Any = process
+        # Sentinel values for flow control without exposing conditionals
+        self._EMPTY_RESULT: List[Tuple[str, float, Path]] = []
+        self._NO_EARLY_EXIT = object()
 
     def _expand_path(self, path_str: str) -> Path:
         """Expand ~ and $HOME in path string."""
@@ -688,6 +691,153 @@ class FuzzyPemCompleter:
 
         return candidates
 
+    def _check_query_empty(self, query: str) -> bool:
+        """Check if query is empty."""
+        return not query
+
+    def _handle_empty_query_or_continue(self, query: str) -> Union[List[Tuple[str, float, Path]], Any]:
+        """Return empty list for empty query, sentinel to continue otherwise."""
+        return self._EMPTY_RESULT if self._check_query_empty(query) else self._NO_EARLY_EXIT
+
+    def _check_query_has_uppercase(self, query: str) -> bool:
+        """Check if query contains any uppercase characters."""
+        return any(c.isupper() for c in query)
+
+    def _find_case_sensitive_prefix_matches(self, query: str, candidates: List[Path]) -> List[Path]:
+        """Find candidates with case-sensitive prefix match."""
+        return [c for c in candidates if c.name.startswith(query)]
+
+    def _find_case_insensitive_prefix_matches(self, query: str, candidates: List[Path]) -> List[Path]:
+        """Find candidates with case-insensitive prefix match."""
+        query_lower: str = query.lower()
+        return [c for c in candidates if c.name.lower().startswith(query_lower)]
+
+    def _select_prefix_match_strategy(self, query: str, candidates: List[Path]) -> List[Path]:
+        """Select and apply appropriate prefix matching strategy based on query case."""
+        query_has_upper = self._check_query_has_uppercase(query)
+        return (self._find_case_sensitive_prefix_matches(query, candidates)
+                if query_has_upper
+                else self._find_case_insensitive_prefix_matches(query, candidates))
+
+    def _check_matches_empty(self, matches: List[Path]) -> bool:
+        """Check if matches list is empty."""
+        return not matches
+
+    def _handle_no_matches_or_continue(self, matches: List[Path]) -> Union[List[Tuple[str, float, Path]], Any]:
+        """Return empty list if no matches, sentinel to continue otherwise."""
+        return self._EMPTY_RESULT if self._check_matches_empty(matches) else self._NO_EARLY_EXIT
+
+    def _score_prefix_matches(self, matches: List[Path]) -> List[Tuple[str, float, Path]]:
+        """Assign uniform score to all prefix matches."""
+        return [(c.name, 100.0, c) for c in matches]
+
+    def _perform_prefix_matching_workflow(self, matches: List[Path]) -> List[Tuple[str, float, Path]]:
+        """Execute prefix matching workflow: check for no matches then score."""
+        no_matches_result = self._handle_no_matches_or_continue(matches)
+        return no_matches_result if no_matches_result is not self._NO_EARLY_EXIT else self._score_prefix_matches(matches)
+
+    def _perform_prefix_matching(self, query: str, candidates: List[Path]) -> List[Tuple[str, float, Path]]:
+        """Complete prefix matching workflow with internal decision-making."""
+        matches = self._select_prefix_match_strategy(query, candidates)
+        return self._perform_prefix_matching_workflow(matches)
+
+    def _check_ordered_characters(self, query_str: str, target_str: str) -> bool:
+        """Check if all characters in query appear in order in target."""
+        query_lower = query_str.lower()
+        target_lower = target_str.lower()
+        query_idx = 0
+        for char in target_lower:
+            if query_idx < len(query_lower) and char == query_lower[query_idx]:
+                query_idx += 1
+        return query_idx == len(query_lower)
+
+    def _filter_by_ordered_characters(self, query: str, candidates: List[Path]) -> List[Path]:
+        """Filter candidates to only those with query characters in order."""
+        return [c for c in candidates if self._check_ordered_characters(query, c.name)]
+
+    def _extract_names_from_candidates(self, candidates: List[Path]) -> List[str]:
+        """Extract name strings from candidate paths."""
+        return [c.name for c in candidates]
+
+    def _perform_fuzzy_scoring(self, query: str, names: List[str]) -> List[Tuple[str, float, int]]:
+        """Score candidates using fuzzy matching algorithm."""
+        return self.process.extract(query, names, scorer=self.fuzz.QRatio, limit=None)
+
+    def _create_name_to_path_lookup(self, candidates: List[Path]) -> Dict[str, Path]:
+        """Create dictionary mapping candidate names to paths."""
+        return {c.name: c for c in candidates}
+
+    def _check_has_prefix_match(self, name: str, query: str) -> bool:
+        """Check if name starts with query (case-insensitive)."""
+        return name.lower().startswith(query.lower())
+
+    def _calculate_adjusted_score(self, name: str, query: str, base_score: float) -> float:
+        """Calculate score with prefix bonus applied internally."""
+        return base_score + 50.0 if self._check_has_prefix_match(name, query) else base_score
+
+    def _apply_prefix_bonus_to_match(self, name: str, score: float, query: str, lookup: Dict[str, Path]) -> Tuple[str, float, Path]:
+        """Apply prefix bonus to a single match and return result tuple."""
+        path = lookup[name]
+        adjusted_score = self._calculate_adjusted_score(name, query, score)
+        return (name, adjusted_score, path)
+
+    def _apply_prefix_bonuses(self, matches: List[Tuple[str, float, int]], query: str, lookup: Dict[str, Path]) -> List[Tuple[str, float, Path]]:
+        """Apply prefix bonus to all matches and return adjusted results."""
+        return [self._apply_prefix_bonus_to_match(name, score, query, lookup) for name, score, _ in matches]
+
+    def _continue_with_fuzzy_scoring(self, valid_candidates: List[Path], query: str) -> List[Tuple[str, float, Path]]:
+        """Continue with fuzzy scoring after validation."""
+        names = self._extract_names_from_candidates(valid_candidates)
+        matches = self._perform_fuzzy_scoring(query, names)
+        lookup = self._create_name_to_path_lookup(valid_candidates)
+        return self._apply_prefix_bonuses(matches, query, lookup)
+
+    def _perform_fuzzy_matching_workflow(self, valid_candidates: List[Path], query: str) -> List[Tuple[str, float, Path]]:
+        """Execute fuzzy matching workflow: check for no matches then score."""
+        no_matches_result = self._handle_no_matches_or_continue(valid_candidates)
+        return no_matches_result if no_matches_result is not self._NO_EARLY_EXIT else self._continue_with_fuzzy_scoring(valid_candidates, query)
+
+    def _perform_fuzzy_matching(self, query: str, candidates: List[Path]) -> List[Tuple[str, float, Path]]:
+        """Complete fuzzy matching workflow with internal decision-making."""
+        valid_candidates = self._filter_by_ordered_characters(query, candidates)
+        return self._perform_fuzzy_matching_workflow(valid_candidates, query)
+
+    def _select_matching_strategy(self, query: str, candidates: List[Path]) -> List[Tuple[str, float, Path]]:
+        """Dispatch to appropriate matching strategy (prefix or fuzzy) based on mode."""
+        return (self._perform_prefix_matching(query, candidates)
+                if self.no_fuzzy
+                else self._perform_fuzzy_matching(query, candidates))
+
+    def _check_is_pem_file(self, path: Path) -> bool:
+        """Check if path is a PEM file."""
+        return path.is_file() and path.suffix.lower() == '.pem'
+
+    def _separate_pem_files(self, results: List[Tuple[str, float, Path]]) -> Tuple[List[Tuple[str, float, Path]], List[Tuple[str, float, Path]]]:
+        """Separate results into PEM files and other matches."""
+        pem_results = [(name, score, path) for name, score, path in results if self._check_is_pem_file(path)]
+        other_results = [(name, score, path) for name, score, path in results if not self._check_is_pem_file(path)]
+        return pem_results, other_results
+
+    def _sort_by_score_and_name(self, results: List[Tuple[str, float, Path]]) -> None:
+        """Sort results by score (descending) then natural sort (in-place)."""
+        results.sort(key=lambda x: (-x[1], natural_sort_key(x[0])))
+
+    def _organize_and_sort_results(self, results: List[Tuple[str, float, Path]]) -> List[Tuple[str, float, Path]]:
+        """Separate PEM files, sort each group, and combine with PEM files first."""
+        pem_results, other_results = self._separate_pem_files(results)
+        self._sort_by_score_and_name(pem_results)
+        self._sort_by_score_and_name(other_results)
+        return pem_results + other_results
+
+    def _continue_with_matching(self, query: str, candidates: List[Path]) -> List[Tuple[str, float, Path]]:
+        """Continue with matching strategy selection and result organization."""
+        matching_results = self._select_matching_strategy(query, candidates)
+        return self._organize_and_sort_results(matching_results)
+
+    def _dispatch_to_matching_or_return_early(self, empty_query_result: Union[List[Tuple[str, float, Path]], Any], query: str, candidates: List[Path]) -> List[Tuple[str, float, Path]]:
+        """Dispatch to matching workflow or return early exit result (decision made internally)."""
+        return empty_query_result if empty_query_result is not self._NO_EARLY_EXIT else self._continue_with_matching(query, candidates)
+
     def _fuzzy_match(self, query: str, candidates: List[Path]) -> List[Tuple[str, float, Path]]:
         """
         Perform fuzzy matching on candidates.
@@ -700,88 +850,8 @@ class FuzzyPemCompleter:
             List of tuples (name, score, path) with PEM files first (sorted by score then natural sort),
             then other matches (sorted by score then natural sort)
         """
-        if not query:
-            # No query - return empty list (don't show completions until user types)
-            return []
-
-        if self.no_fuzzy:
-            # Prefix-only matching with case sensitivity rules
-            # Case-sensitive if any uppercase in query, case-insensitive otherwise
-            query_has_upper: bool = any(c.isupper() for c in query)
-
-            matches_paths: List[Path]
-            if query_has_upper:
-                # Case-sensitive matching
-                matches_paths = [c for c in candidates if c.name.startswith(query)]
-            else:
-                # Case-insensitive matching
-                query_lower: str = query.lower()
-                matches_paths = [c for c in candidates if c.name.lower().startswith(query_lower)]
-
-            if not matches_paths:
-                return []
-
-            # Assign score of 100 to all prefix matches (they're all equally good)
-            results: List[Tuple[str, float, Path]] = [(c.name, 100.0, c) for c in matches_paths]
-        else:
-            # Fuzzy matching mode (original behavior)
-            # Check if query characters appear in order in the candidate name (case-insensitive)
-            def has_ordered_chars(query_str: str, target_str: str) -> bool:
-                """Check if all characters in query appear in order in target."""
-                query_lower = query_str.lower()
-                target_lower = target_str.lower()
-                query_idx = 0
-                for char in target_lower:
-                    if query_idx < len(query_lower) and char == query_lower[query_idx]:
-                        query_idx += 1
-                return query_idx == len(query_lower)
-
-            # Filter candidates to only those with characters in order
-            valid_candidates: List[Path] = [c for c in candidates if has_ordered_chars(query, c.name)]
-
-            if not valid_candidates:
-                return []
-
-            # Fuzzy match against basenames using QRatio for better sequential matching
-            names: List[str] = [c.name for c in valid_candidates]
-            matches: List[Tuple[str, float, int]] = self.process.extract(
-                query,
-                names,
-                scorer=self.fuzz.QRatio,
-                limit=None
-                # No score_cutoff - we already filtered by ordered characters
-            )
-
-            # Create lookup dict
-            name_to_path: Dict[str, Path] = {c.name: c for c in valid_candidates}
-
-            # Apply prefix bonus: boost score for filenames that start with the query
-            # This ensures prefix matches rank higher than fuzzy matches in the middle
-            adjusted_results: List[Tuple[str, float, Path]] = []
-            for name, score, _ in matches:
-                path: Path = name_to_path[name]
-                # Add significant bonus if name starts with query (case-insensitive)
-                adjusted_score: float
-                if name.lower().startswith(query.lower()):
-                    adjusted_score = score + 50.0
-                else:
-                    adjusted_score = score
-                adjusted_results.append((name, adjusted_score, path))
-
-            results = adjusted_results
-
-        # Separate PEM files from other matches
-        pem_results = [(name, score, path) for name, score, path in results
-                       if path.is_file() and path.suffix.lower() == '.pem']
-        other_results = [(name, score, path) for name, score, path in results
-                        if not (path.is_file() and path.suffix.lower() == '.pem')]
-
-        # Sort each group by score (descending) then natural sort (case-insensitive)
-        pem_results.sort(key=lambda x: (-x[1], natural_sort_key(x[0])))
-        other_results.sort(key=lambda x: (-x[1], natural_sort_key(x[0])))
-
-        # Return PEM files first, then other matches
-        return pem_results + other_results
+        empty_query_result = self._handle_empty_query_or_continue(query)
+        return self._dispatch_to_matching_or_return_early(empty_query_result, query, candidates)
 
     def get_completions(self, document: Any, complete_event: Any) -> Iterator[Any]:
         """
