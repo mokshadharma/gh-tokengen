@@ -853,6 +853,146 @@ class FuzzyPemCompleter:
         empty_query_result = self._handle_empty_query_or_continue(query)
         return self._dispatch_to_matching_or_return_early(empty_query_result, query, candidates)
 
+    def _determine_initial_directory(self, text: str) -> Path:
+        """Determine initial directory based on text prefix (handles all path prefix logic internally)."""
+        if text.startswith('/'):
+            return Path('/')
+        elif text.startswith('~/') or text.startswith('$HOME/'):
+            return Path.home()
+        else:
+            return self.base_dir
+
+    def _should_skip_directory_part(self, index: int, part: str) -> bool:
+        """Determine if a directory part should be skipped during navigation."""
+        if not part:
+            return True
+        if index == 0 and part in ('~', '$HOME'):
+            return True
+        return False
+
+    def _navigate_one_directory_part(self, current_dir: Path, part: str) -> Optional[Path]:
+        """Navigate through one directory part, returning new directory or None if navigation fails."""
+        subdirs = [p for p in self._get_candidates(current_dir, False)]
+        if not subdirs:
+            return None
+
+        matches = self._fuzzy_match(part, subdirs)
+        if matches:
+            return matches[0][2]
+        else:
+            return None
+
+    def _navigate_directory_parts_with_early_exit(self, dir_parts: List[str], initial_dir: Path) -> Optional[Path]:
+        """Navigate through directory parts, returns None if navigation should abort early."""
+        current_dir = initial_dir
+
+        for i, part in enumerate(dir_parts):
+            if self._should_skip_directory_part(i, part):
+                continue
+
+            if not part:
+                return None
+
+            new_dir = self._navigate_one_directory_part(current_dir, part)
+            if new_dir is None:
+                return None
+
+            current_dir = new_dir
+
+        return current_dir
+
+    def _separate_pem_and_directories(self, candidates: List[Path]) -> Tuple[List[Path], List[Path]]:
+        """Separate candidates into PEM files and directories."""
+        pem_files = [c for c in candidates if c.is_file() and c.suffix.lower() == '.pem']
+        directories = [c for c in candidates if c.is_dir()]
+        return pem_files, directories
+
+    def _sort_by_natural_order(self, paths: List[Path]) -> None:
+        """Sort paths list in-place by natural sort order."""
+        paths.sort(key=lambda p: natural_sort_key(p.name))
+
+    def _create_completion_for_path(self, path: Path, start_position: int, Completion: Any) -> Any:
+        """Create a Completion object for a path (handles directory vs file logic internally)."""
+        if path.is_dir():
+            completion_text = path.name + '/'
+        else:
+            completion_text = path.name
+
+        return Completion(
+            completion_text,
+            start_position=start_position,
+            display=completion_text
+        )
+
+    def _yield_completions_for_paths(self, paths: List[Path], start_position: int, Completion: Any) -> Iterator[Any]:
+        """Yield completions for a list of paths."""
+        for path in paths:
+            yield self._create_completion_for_path(path, start_position, Completion)
+
+    def _yield_empty_query_completions(self, candidates: List[Path], Completion: Any) -> Iterator[Any]:
+        """Handle completions when query is empty (path ends with /)."""
+        pem_files, directories = self._separate_pem_and_directories(candidates)
+        self._sort_by_natural_order(pem_files)
+        self._sort_by_natural_order(directories)
+
+        yield from self._yield_completions_for_paths(pem_files, 0, Completion)
+        yield from self._yield_completions_for_paths(directories, 0, Completion)
+
+    def _yield_fuzzy_query_completions(self, final_query: str, candidates: List[Path], Completion: Any) -> Iterator[Any]:
+        """Handle completions when query is non-empty (fuzzy matching)."""
+        fuzzy_matches = self._fuzzy_match(final_query, candidates)
+
+        for name, score, path in fuzzy_matches:
+            yield self._create_completion_for_path(path, -len(final_query), Completion)
+
+    def _dispatch_query_completions(self, final_query: str, candidates: List[Path], Completion: Any) -> Iterator[Any]:
+        """Dispatch to appropriate completion strategy based on query emptiness."""
+        if not final_query:
+            yield from self._yield_empty_query_completions(candidates, Completion)
+        else:
+            yield from self._yield_fuzzy_query_completions(final_query, candidates, Completion)
+
+    def _handle_slash_path_completions(self, text: str, Completion: Any) -> Iterator[Any]:
+        """Handle completions for paths containing slashes."""
+        parts = text.split('/')
+        final_query = parts[-1]
+        dir_parts = parts[:-1]
+
+        initial_dir = self._determine_initial_directory(text)
+        current_dir = self._navigate_directory_parts_with_early_exit(dir_parts, initial_dir)
+
+        if current_dir is None:
+            return
+
+        candidates = self._get_candidates(current_dir, True)
+        yield from self._dispatch_query_completions(final_query, candidates, Completion)
+
+    def _should_block_tilde_completion(self, text: str) -> bool:
+        """Determine if tilde text should block completions."""
+        if text == '~':
+            return True
+        elif text.startswith('~') and len(text) > 1 and '/' not in text:
+            return True
+        return False
+
+    def _handle_non_slash_path_completions(self, text: str, Completion: Any) -> Iterator[Any]:
+        """Handle completions for paths without slashes."""
+        if self._should_block_tilde_completion(text):
+            return
+
+        candidates = self._get_candidates(self.base_dir, True)
+        matches = self._fuzzy_match(text, candidates)
+
+        for name, score, path in matches:
+            yield self._create_completion_for_path(path, -len(text), Completion)
+
+    def _dispatch_completions_by_path_type(self, text: str, Completion: Any) -> Iterator[Any]:
+        """Dispatch to appropriate completion handler based on path type (slash vs non-slash)."""
+        if '/' in text:
+            yield from self._handle_slash_path_completions(text, Completion)
+        else:
+            yield from self._handle_non_slash_path_completions(text, Completion)
+
     def get_completions(self, document: Any, complete_event: Any) -> Iterator[Any]:
         """
         Generate completions for the current document state.
@@ -866,125 +1006,8 @@ class FuzzyPemCompleter:
         """
         from prompt_toolkit.completion import Completion
 
-        text: str = document.text_before_cursor
-
-        # Parse the path into components
-        if '/' in text:
-            # Split into directory parts and final query
-            parts: List[str] = text.split('/')
-            final_query: str = parts[-1]
-            dir_parts: List[str] = parts[:-1]
-
-            # Build the directory path - expand ~ and $HOME for internal use
-            current_dir: Path
-            if text.startswith('/'):
-                current_dir = Path('/')
-            elif text.startswith('~/') or text.startswith('$HOME/'):
-                current_dir = Path.home()
-            else:
-                current_dir = self.base_dir
-
-            # Navigate through directory parts (but not the final query part)
-            for i, part in enumerate(dir_parts):
-                # Skip empty parts and special markers at the start
-                if not part:
-                    continue
-                if i == 0 and part in ('~', '$HOME'):
-                    # Already handled above by setting current_dir to home
-                    continue
-
-                # This part is an intermediate directory to navigate through
-                # Get subdirectories and fuzzy match
-                subdirs = [p for p in self._get_candidates(current_dir, False)]
-                if not subdirs:
-                    return
-
-                # For intermediate directories, we need to match even with empty part
-                # Otherwise, use fuzzy matching that requires typing
-                if part:
-                    matches = self._fuzzy_match(part, subdirs)
-                    if matches:
-                        # Use best match
-                        current_dir = matches[0][2]
-                    else:
-                        return
-                else:
-                    # Empty part in the middle shouldn't happen, but handle it
-                    return
-
-            # Get candidates for final segment (includes .pem files)
-            # This is where we search for the final_query
-            candidates: List[Path] = self._get_candidates(current_dir, True)
-
-            # Special case: if final_query is empty (path ends with /),
-            # show all PEM files first, then subdirectories, all in natural order
-            if not final_query:
-                # Separate PEM files and directories
-                pem_files: List[Path] = [c for c in candidates if c.is_file() and c.suffix.lower() == '.pem']
-                directories: List[Path] = [c for c in candidates if c.is_dir()]
-
-                # Sort both in natural order
-                pem_files.sort(key=lambda p: natural_sort_key(p.name))
-                directories.sort(key=lambda p: natural_sort_key(p.name))
-
-                # Yield PEM files first
-                for path in pem_files:
-                    yield Completion(
-                        path.name,
-                        start_position=0,
-                        display=path.name
-                    )
-
-                # Then yield directories
-                for path in directories:
-                    yield Completion(
-                        path.name + '/',
-                        start_position=0,
-                        display=path.name + '/'
-                    )
-            else:
-                # Normal fuzzy matching
-                fuzzy_matches: List[Tuple[str, float, Path]] = self._fuzzy_match(final_query, candidates)
-
-                # Generate completions
-                for name, score, path in fuzzy_matches:
-                    completion_text: str
-                    if path.is_dir():
-                        completion_text = name + '/'
-                    else:
-                        completion_text = name
-
-                    # Calculate how much of the final query to replace
-                    yield Completion(
-                        completion_text,
-                        start_position=-len(final_query),
-                        display=completion_text
-                    )
-        else:
-            # No slash - don't show completions for ~ alone
-            if text == '~':
-                # User typed just ~, don't show any completions
-                return
-            elif text.startswith('~') and len(text) > 1:
-                # User typed ~something (but no slash yet)
-                # Don't show completions until they type ~/
-                return
-            else:
-                # No slash, no ~ - match in base directory
-                candidates = self._get_candidates(self.base_dir, True)
-                matches = self._fuzzy_match(text, candidates)
-
-                for name, score, path in matches:
-                    if path.is_dir():
-                        completion_text = name + '/'
-                    else:
-                        completion_text = name
-
-                    yield Completion(
-                        completion_text,
-                        start_position=-len(text),
-                        display=completion_text
-                    )
+        text = document.text_before_cursor
+        yield from self._dispatch_completions_by_path_type(text, Completion)
 
     async def get_completions_async(self, document: Any, complete_event: Any) -> Any:
         """
