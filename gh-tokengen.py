@@ -1889,6 +1889,83 @@ def prompt_for_installation_id(force: bool) -> str:
     )
 
 
+def obtain_client_id(provided_id: Optional[str], force: bool) -> str:
+    """
+    Obtain Client ID either from provided value or by prompting.
+
+    Args:
+        provided_id: Client ID if provided via command line, None otherwise
+        force: Skip validation if True
+
+    Returns:
+        Client ID string
+    """
+    if provided_id:
+        return provided_id
+    return prompt_for_client_id(force)
+
+
+def obtain_pem_path_string(provided_path: Optional[str], no_path_completion: bool, no_fuzzy: bool) -> str:
+    """
+    Obtain PEM path string either from provided value or by prompting.
+
+    Args:
+        provided_path: PEM path if provided via command line, None otherwise
+        no_path_completion: Disable path completion
+        no_fuzzy: Use prefix-only matching
+
+    Returns:
+        PEM path string
+    """
+    if provided_path:
+        return provided_path
+    return prompt_for_pem_path(no_path_completion, no_fuzzy)
+
+
+def expand_and_validate_pem_path(pem_path_str: str, force: bool) -> Path:
+    """
+    Expand PEM path string and validate the file.
+
+    Args:
+        pem_path_str: Path string to expand
+        force: Skip format validation if True
+
+    Returns:
+        Expanded and validated Path object
+    """
+    try:
+        pem_path = expand_path(pem_path_str)
+    except Exception as e:
+        fatal_error(f"Invalid file path: {e}")
+
+    try:
+        validate_pem_file(pem_path, force)
+    except ValidationError as e:
+        fatal_error(str(e))
+
+    return pem_path
+
+
+def obtain_installation_id(provided_id: Optional[str], jwt_mode: bool, force: bool) -> Optional[str]:
+    """
+    Obtain Installation ID either from provided value or by prompting.
+    Returns None without prompting if in JWT-only mode.
+
+    Args:
+        provided_id: Installation ID if provided via command line, None otherwise
+        jwt_mode: True if generating JWT only (no installation token needed)
+        force: Skip validation if True
+
+    Returns:
+        Installation ID string or None
+    """
+    if jwt_mode:
+        return provided_id
+    if provided_id:
+        return provided_id
+    return prompt_for_installation_id(force)
+
+
 def collect_inputs_interactively(args: argparse.Namespace) -> Tuple[str, Path, str, Optional[str]]:
     """
     Collect and validate inputs in interactive mode.
@@ -1896,30 +1973,10 @@ def collect_inputs_interactively(args: argparse.Namespace) -> Tuple[str, Path, s
     Returns:
         Tuple of (client_id, pem_path, pem_path_str, installation_id)
     """
-    client_id = args.client_id
-    if not client_id:
-        client_id = prompt_for_client_id(args.force)
-
-    pem_path_str = args.pem_path
-    if not pem_path_str:
-        pem_path_str = prompt_for_pem_path(args.no_path_completion, args.no_fuzzy)
-
-    # Expand and validate PEM path
-    try:
-        pem_path = expand_path(pem_path_str)
-    except Exception as e:
-        fatal_error(f"Invalid file path: {e}")
-
-    try:
-        validate_pem_file(pem_path, args.force)
-    except ValidationError as e:
-        fatal_error(str(e))
-
-    # Installation ID only needed when not in JWT-only mode
-    installation_id = args.installation_id
-    if not args.jwt and not installation_id:
-        installation_id = prompt_for_installation_id(args.force)
-
+    client_id = obtain_client_id(args.client_id, args.force)
+    pem_path_str = obtain_pem_path_string(args.pem_path, args.no_path_completion, args.no_fuzzy)
+    pem_path = expand_and_validate_pem_path(pem_path_str, args.force)
+    installation_id = obtain_installation_id(args.installation_id, args.jwt, args.force)
     return client_id, pem_path, pem_path_str, installation_id
 
 
