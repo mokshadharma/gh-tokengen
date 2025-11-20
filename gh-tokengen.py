@@ -1347,152 +1347,186 @@ def prompt_for_input(
                 if enable_path_completion and not buf.complete_state:
                     buf.start_completion(select_first=False)
 
+        def check_ordered_chars(query_str: str, target_str: str) -> bool:
+            """Check if query characters appear in order in target (case-insensitive)."""
+            query_lower: str = query_str.lower()
+            target_lower: str = target_str.lower()
+            query_idx: int = 0
+            for char in target_lower:
+                query_idx += (query_idx < len(query_lower) and char == query_lower[query_idx])
+            return query_idx == len(query_lower)
+
+        def match_prefix_case_sensitive(query_str: str, target_str: str) -> bool:
+            """Match using case-sensitive prefix matching."""
+            return target_str.startswith(query_str)
+
+        def match_prefix_case_insensitive(query_str: str, target_str: str) -> bool:
+            """Match using case-insensitive prefix matching."""
+            return target_str.lower().startswith(query_str.lower())
+
+        def select_prefix_matcher(query_str: str) -> Callable[[str, str], bool]:
+            """Select appropriate prefix matcher based on query case."""
+            query_has_upper = any(c.isupper() for c in query_str)
+            return match_prefix_case_sensitive if query_has_upper else match_prefix_case_insensitive
+
+        def match_by_prefix_mode(query_str: str, target_str: str) -> bool:
+            """Match using prefix-only matching with case sensitivity rules."""
+            matcher = select_prefix_matcher(query_str)
+            return matcher(query_str, target_str)
+
+        def match_query_against_target(query_str: str, target_str: str) -> bool:
+            """Match query against target based on current fuzzy mode setting."""
+            return match_by_prefix_mode(query_str, target_str) if no_fuzzy else check_ordered_chars(query_str, target_str)
+
+        def collect_directory_candidates(directory: Path) -> List[Path]:
+            """Collect directory items from a path, returning empty list if unavailable."""
+            return [item for item in directory.iterdir() if item.is_dir()] if directory.exists() else []
+
+        def collect_final_segment_candidates(directory: Path) -> List[Path]:
+            """Collect both directories and .pem files from a path."""
+            return [item for item in directory.iterdir()
+                   if item.is_dir() or (item.is_file() and item.suffix == '.pem')] if directory.exists() else []
+
+        def collect_candidates_for_segment(directory: Path, is_final_segment: bool) -> List[Path]:
+            """Collect candidates based on whether this is the final path segment."""
+            return collect_final_segment_candidates(directory) if is_final_segment else collect_directory_candidates(directory)
+
+        def find_exact_match(candidates: List[Path], name: str) -> Optional[Path]:
+            """Find exact name match in candidate list."""
+            return next((c for c in candidates if c.name == name), None)
+
+        def filter_candidates_by_query(candidates: List[Path], query: str) -> List[Path]:
+            """Filter candidates to those matching the query."""
+            return [c for c in candidates if match_query_against_target(query, c.name)]
+
+        def select_first_candidate(candidates: List[Path]) -> Path:
+            """Select the first candidate from a list."""
+            return candidates[0]
+
+        def score_and_select_best_fuzzy_match(candidates: List[Path], query: str) -> Optional[Path]:
+            """Score candidates and return the best fuzzy match."""
+            from rapidfuzz import fuzz, process
+            names: List[str] = [c.name for c in candidates]
+            matches: List[Tuple[str, float, int]] = process.extract(query, names, scorer=fuzz.QRatio, limit=1)
+            return next((c for c in candidates if c.name == matches[0][0]), None) if matches else None
+
+        def select_best_fuzzy_candidate(candidates: List[Path], query: str) -> Path:
+            """Select best candidate using fuzzy scoring."""
+            return score_and_select_best_fuzzy_match(candidates, query) or candidates[0]
+
+        def select_candidate_by_mode(candidates: List[Path], query: str) -> Path:
+            """Select best candidate based on current fuzzy mode setting."""
+            return select_first_candidate(candidates) if no_fuzzy else select_best_fuzzy_candidate(candidates, query)
+
+        def resolve_segment_match(candidates: List[Path], segment: str) -> Optional[Path]:
+            """Resolve a path segment to a matched candidate path."""
+            exact = find_exact_match(candidates, segment)
+            return exact or (lambda filtered: select_candidate_by_mode(filtered, segment) if filtered else None)(filter_candidates_by_query(candidates, segment))
+
+        def determine_root_for_absolute_path() -> Tuple[Path, int, List[str]]:
+            """Determine base directory for absolute paths starting with /."""
+            return (Path('/'), 1, [''])
+
+        def determine_root_for_tilde_path() -> Tuple[Path, int, List[str]]:
+            """Determine base directory for paths starting with ~/."""
+            return (Path.home(), 1, ['~'])
+
+        def determine_root_for_home_path() -> Tuple[Path, int, List[str]]:
+            """Determine base directory for paths starting with $HOME/."""
+            return (Path.home(), 1, ['$HOME'])
+
+        def determine_root_for_relative_path() -> Tuple[Path, int, List[str]]:
+            """Determine base directory for relative paths."""
+            return (Path(os.getcwd()), 0, [])
+
+        def select_path_root_handler(text: str) -> Callable[[], Tuple[Path, int, List[str]]]:
+            """Select the appropriate root handler based on path prefix."""
+            starts_with_tilde = text.startswith('~/')
+            starts_with_home = text.startswith('$HOME/')
+            starts_with_slash = text.startswith('/')
+
+            return (determine_root_for_absolute_path if starts_with_slash else
+                   determine_root_for_tilde_path if starts_with_tilde else
+                   determine_root_for_home_path if starts_with_home else
+                   determine_root_for_relative_path)
+
+        def initialize_path_navigation(text: str) -> Tuple[Path, int, List[str]]:
+            """Initialize base directory, start index, and unexpanded parts for path navigation."""
+            handler = select_path_root_handler(text)
+            return handler()
+
+        def skip_empty_or_special_part(part: str) -> bool:
+            """Determine if a path part should be skipped during navigation."""
+            return not part or part in ('~', '$HOME')
+
+        def build_formatted_path_result(unexpanded_parts: List[str], resolved_path: Path) -> Tuple[str, str]:
+            """Build the final result tuple with unexpanded and expanded paths."""
+            unexpanded = '/'.join(unexpanded_parts)
+            return (unexpanded, str(resolved_path))
+
+        def navigate_through_path_segments(parts: List[str], start_idx: int, initial_dir: Path, unexpanded_parts: List[str]) -> Optional[Tuple[Path, List[str]]]:
+            """Navigate through all path segments, resolving each one."""
+            current_dir = initial_dir
+
+            for i in range(start_idx, len(parts)):
+                part = parts[i]
+
+                if skip_empty_or_special_part(part):
+                    continue
+
+                is_final = (i == len(parts) - 1)
+                candidates = collect_candidates_for_segment(current_dir, is_final)
+                matched = resolve_segment_match(candidates, part)
+
+                if not matched:
+                    return None
+
+                current_dir = matched
+                unexpanded_parts.append(matched.name)
+
+            return (current_dir, unexpanded_parts)
+
+        def resolve_multi_segment_path(text: str) -> Optional[Tuple[str, str]]:
+            """Resolve a path with multiple segments (contains /)."""
+            parts = text.split('/')
+            current_dir, start_idx, unexpanded_parts = initialize_path_navigation(text)
+            navigation_result = navigate_through_path_segments(parts, start_idx, current_dir, unexpanded_parts)
+            return build_formatted_path_result(navigation_result[1], navigation_result[0]) if navigation_result else None
+
+        def resolve_single_segment_path(text: str) -> Optional[Tuple[str, str]]:
+            """Resolve a simple path with no directory separators."""
+            base_dir = Path(os.getcwd())
+            candidates = collect_final_segment_candidates(base_dir)
+            exact = find_exact_match(candidates, text)
+
+            if exact:
+                return (text, str(exact))
+
+            filtered = filter_candidates_by_query(candidates, text)
+            return ((lambda m: (m.name, str(m)))(select_candidate_by_mode(filtered, text))) if filtered else None
+
+        def dispatch_path_resolution(text: str) -> Optional[Tuple[str, str]]:
+            """Dispatch to appropriate path resolution strategy based on path structure."""
+            return resolve_multi_segment_path(text) if '/' in text else resolve_single_segment_path(text)
+
+        def resolve_path_with_error_handling(text: str) -> Optional[Tuple[str, str]]:
+            """Resolve path with exception handling, returning None on any error."""
+            try:
+                return dispatch_path_resolution(text)
+            except Exception:
+                return None
+
+        def validate_path_resolution_preconditions(text: str) -> bool:
+            """Check if preconditions for path resolution are met."""
+            return bool(text and enable_path_completion)
+
         def resolve_fuzzy_path(text: str) -> Optional[Tuple[str, str]]:
             """Resolve a fuzzy path to an actual full path.
 
             Returns:
                 Tuple of (unexpanded_path, expanded_path) or None if no match
             """
-            if not text or not enable_path_completion:
-                return None
-
-            try:
-                # Helper for matching based on mode
-                def has_ordered_chars(query_str: str, target_str: str) -> bool:
-                    query_lower: str = query_str.lower()
-                    target_lower: str = target_str.lower()
-                    query_idx: int = 0
-                    for char in target_lower:
-                        if query_idx < len(query_lower) and char == query_lower[query_idx]:
-                            query_idx += 1
-                    return query_idx == len(query_lower)
-
-                def matches_query(query_str: str, target_str: str) -> bool:
-                    """Check if target matches query based on current mode."""
-                    if no_fuzzy:
-                        # Prefix-only matching
-                        query_has_upper = any(c.isupper() for c in query_str)
-                        if query_has_upper:
-                            return target_str.startswith(query_str)
-                        else:
-                            return target_str.lower().startswith(query_str.lower())
-                    else:
-                        # Fuzzy matching
-                        return has_ordered_chars(query_str, target_str)
-
-                # Track if path started with ~ or $HOME for preserving it
-                starts_with_tilde: bool = text.startswith('~/')
-                starts_with_home: bool = text.startswith('$HOME/')
-
-                # Parse the path
-                if '/' in text:
-                    parts: List[str] = text.split('/')
-
-                    # Determine base directory
-                    current_dir: Path
-                    start_idx: int
-                    unexpanded_parts: List[str]
-                    if text.startswith('/'):
-                        current_dir = Path('/')
-                        start_idx = 1
-                        unexpanded_parts = ['']
-                    elif starts_with_tilde or starts_with_home:
-                        current_dir = Path.home()
-                        start_idx = 1
-                        unexpanded_parts = ['~' if starts_with_tilde else '$HOME']
-                    else:
-                        current_dir = Path(os.getcwd())
-                        start_idx = 0
-                        unexpanded_parts = []
-
-                    # Navigate through each part
-                    for i in range(start_idx, len(parts)):
-                        part: str = parts[i]
-                        if not part or part in ('~', '$HOME'):
-                            continue
-
-                        # Get candidates in current directory
-                        is_last: bool = (i == len(parts) - 1)
-                        candidates: List[Path] = []
-
-                        if current_dir.exists():
-                            for item in current_dir.iterdir():
-                                if is_last:
-                                    # Last segment: include .pem files and directories
-                                    if item.is_dir() or (item.is_file() and item.suffix == '.pem'):
-                                        candidates.append(item)
-                                else:
-                                    # Intermediate: only directories
-                                    if item.is_dir():
-                                        candidates.append(item)
-
-                        # Try exact match first
-                        matched_path: Optional[Path] = None
-                        for candidate in candidates:
-                            if candidate.name == part:
-                                matched_path = candidate
-                                break
-
-                        # If no exact match, try matching based on mode
-                        if not matched_path:
-                            matching_candidates: List[Path] = [c for c in candidates if matches_query(part, c.name)]
-                            if matching_candidates:
-                                if no_fuzzy:
-                                    # Prefix mode: use first match
-                                    matched_path = matching_candidates[0]
-                                else:
-                                    # Fuzzy mode: use the best match (first one after sorting by score)
-                                    from rapidfuzz import fuzz, process
-                                    names: List[str] = [c.name for c in matching_candidates]
-                                    matches: List[Tuple[str, float, int]] = process.extract(part, names, scorer=fuzz.QRatio, limit=1)
-                                    if matches:
-                                        best_name: str = matches[0][0]
-                                        matched_path = next(c for c in matching_candidates if c.name == best_name)
-
-                        if matched_path:
-                            current_dir = matched_path
-                            unexpanded_parts.append(matched_path.name)
-                        else:
-                            return None
-
-                    # Return both unexpanded and expanded paths
-                    unexpanded: str = '/'.join(unexpanded_parts)
-                    return (unexpanded, str(current_dir))
-                else:
-                    # No slash - match in current directory
-                    base_dir: Path = Path(os.getcwd())
-                    candidate_items: List[Path] = []
-
-                    if base_dir.exists():
-                        for item in base_dir.iterdir():
-                            if item.is_dir() or (item.is_file() and item.suffix == '.pem'):
-                                candidate_items.append(item)
-
-                    # Try exact match first
-                    for candidate in candidate_items:
-                        if candidate.name == text:
-                            return (text, str(candidate))
-
-                    # Try matching based on mode
-                    matching_items: List[Path] = [c for c in candidate_items if matches_query(text, c.name)]
-                    if matching_items:
-                        if no_fuzzy:
-                            # Prefix mode: use first match
-                            matched: Path = matching_items[0]
-                            return (matched.name, str(matched))
-                        else:
-                            # Fuzzy mode: use best match
-                            from rapidfuzz import fuzz, process
-                            names = [c.name for c in matching_items]
-                            fuzzy_matches: List[Tuple[str, float, int]] = process.extract(text, names, scorer=fuzz.QRatio, limit=1)
-                            if fuzzy_matches:
-                                best_name = fuzzy_matches[0][0]
-                                matched = next(c for c in matching_items if c.name == best_name)
-                                return (matched.name, str(matched))
-
-                    return None
-            except Exception:
-                return None
+            return resolve_path_with_error_handling(text) if validate_path_resolution_preconditions(text) else None
 
         @kb.add(Keys.ControlM)  # Enter key
         def handle_enter(event: Any) -> None:
