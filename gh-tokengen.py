@@ -963,6 +963,113 @@ def detect_editing_mode_from_inputrc() -> str:
     return 'emacs'
 
 
+def normalize_completion_flags(no_path_completion: bool, no_fuzzy: bool, enable_path_completion: bool) -> Tuple[bool, bool]:
+    """Normalize completion flags based on no_path_completion setting."""
+    if no_path_completion:
+        return True, False
+    return no_fuzzy, enable_path_completion
+
+
+def select_editing_mode_by_string(mode_str: str, EditingMode: Any) -> Any:
+    """Select editing mode enum value based on string."""
+    if mode_str == 'vi':
+        return EditingMode.VI
+    else:
+        return EditingMode.EMACS
+
+
+def create_completer_for_path_mode(enable_path_completion: bool, no_fuzzy: bool, os: Any) -> Optional[Any]:
+    """Create completer based on path completion mode."""
+    if enable_path_completion:
+        base_dir = Path(os.getcwd())
+        return FuzzyPemCompleter(base_dir, no_fuzzy=no_fuzzy)
+    else:
+        return None
+
+
+def create_toolbar_display(flash_error: bool, error_message: str, HTML: Any) -> Any:
+    """Create toolbar display based on error state."""
+    if flash_error:
+        return HTML('<style bg="ansired" fg="ansiblack">  {}  </style>').format(error_message)
+    elif error_message:
+        return HTML('<style fg="ansired">  {}  </style>').format(error_message)
+    return ""
+
+
+def select_validator_for_mode(enable_path_completion: bool, validator: Any) -> Optional[Any]:
+    """Select validator based on path completion mode."""
+    if enable_path_completion:
+        return validator
+    else:
+        return None
+
+
+def select_toolbar_for_modes(enable_path_completion: bool, no_path_completion: bool, validator_func: Optional[Any], bottom_toolbar: Callable[[], Any]) -> Optional[Callable[[], Any]]:
+    """Select toolbar function based on validation modes."""
+    if enable_path_completion or no_path_completion or validator_func:
+        return bottom_toolbar
+    else:
+        return None
+
+
+def attach_no_path_completion_handler(session: Any, state: Any) -> None:
+    """Attach text change handler for no_path_completion mode."""
+    def on_text_changed(_: Any) -> None:
+        state.error_message = ""
+    session.default_buffer.on_text_changed += on_text_changed
+
+
+def attach_auto_expansion_handler(session: Any, completer: Any) -> None:
+    """Attach auto-expansion handler for path completion."""
+    def on_text_changed(_: Any) -> None:
+        buf = session.default_buffer
+        text = buf.text
+        if buf.complete_state:
+            return
+        if text and not text.endswith('/') and '/' not in text[:-1] and text not in ('~', '$HOME'):
+            try:
+                completions = list(completer.get_completions(buf.document, None))
+                if len(completions) == 1:
+                    completion = completions[0]
+                    if completion.text.endswith('/'):
+                        buf.text = completion.text
+                        buf.cursor_position = len(completion.text)
+            except Exception:
+                pass
+    session.default_buffer.on_text_changed += on_text_changed
+
+
+def attach_text_handlers_for_modes(session: Any, no_path_completion: bool, enable_path_completion: bool, completer: Optional[Any], state: Any) -> None:
+    """Attach appropriate text change handlers based on modes."""
+    if no_path_completion:
+        attach_no_path_completion_handler(session, state)
+    if enable_path_completion and completer:
+        attach_auto_expansion_handler(session, completer)
+
+
+def prompt_with_session(session: Any) -> str:
+    """Prompt user with session and return stripped result."""
+    result = session.prompt()
+    return result.strip()
+
+
+def handle_import_error_with_fallback(e: Exception, prompt_text: str) -> str:
+    """Handle ImportError by falling back to basic input."""
+    eprint(f"Warning: Advanced input features unavailable ({e})")
+    eprint(prompt_text, end='')
+    try:
+        return input().strip()
+    except (EOFError, KeyboardInterrupt):
+        eprint()
+        fatal_error("Input cancelled by user")
+
+
+def handle_interrupt_error() -> NoReturn:
+    """Handle keyboard interrupt by showing message and exiting."""
+    eprint()
+    fatal_error("Input cancelled by user")
+
+
 def prompt_for_input(
     prompt_text: str,
     enable_path_completion: bool = False,
@@ -983,10 +1090,7 @@ def prompt_for_input(
     Returns:
         User input string
     """
-    # If no_path_completion is True, it implies no_fuzzy as well
-    if no_path_completion:
-        no_fuzzy = True
-        enable_path_completion = False
+    no_fuzzy, enable_path_completion = normalize_completion_flags(no_path_completion, no_fuzzy, enable_path_completion)
     try:
         from prompt_toolkit import PromptSession
         from prompt_toolkit.enums import EditingMode
@@ -999,40 +1103,22 @@ def prompt_for_input(
         import threading
         import time
 
-        # Detect editing mode from ~/.inputrc
         mode_str = detect_editing_mode_from_inputrc()
-        editing_mode = EditingMode.VI if mode_str == 'vi' else EditingMode.EMACS
-
-        # Configure completer based on path completion setting
-        if enable_path_completion:
-            # Use fuzzy PEM completer with current working directory
-            base_dir = Path(os.getcwd())
-            completer = FuzzyPemCompleter(base_dir, no_fuzzy=no_fuzzy)
-        else:
-            completer = None
-
-        # Create output to stderr
+        editing_mode = select_editing_mode_by_string(mode_str, EditingMode)
+        completer = create_completer_for_path_mode(enable_path_completion, no_fuzzy, os)
         output = create_output(stdout=sys.stderr)
 
-        # Shared state for error display and yank buffer
         class ValidationState:
             def __init__(self) -> None:
                 self.error_message: str = ""
                 self.flash_error: bool = False
                 self.flash_thread: Optional[threading.Thread] = None
-                self.yank_buffer: str = ""  # Store last deleted text for yank
+                self.yank_buffer: str = ""
 
         state = ValidationState()
 
-        # Bottom toolbar for error messages
         def bottom_toolbar() -> Any:
-            if state.flash_error:
-                # Flashing: black text on red background
-                return HTML('<style bg="ansired" fg="ansiblack">  {}  </style>').format(state.error_message)
-            elif state.error_message:
-                # Normal: red text on black background
-                return HTML('<style fg="ansired">  {}  </style>').format(state.error_message)
-            return ""
+            return create_toolbar_display(state.flash_error, state.error_message, HTML)
 
         # Helper functions for validation logic
         def clear_error_state() -> None:
@@ -1580,160 +1666,241 @@ def prompt_for_input(
             """
             return resolve_path_with_error_handling(text) if validate_path_resolution_preconditions(text) else None
 
+        def check_if_path_mode_enabled() -> bool:
+            """Check if any path mode is enabled."""
+            return enable_path_completion or no_path_completion
+
+        def check_if_text_is_empty(text: str) -> bool:
+            """Check if text is empty."""
+            return not text
+
+        def select_validation_path_for_no_completion(text: str) -> str:
+            """Return validation path for no_path_completion mode."""
+            return text
+
+        def update_buffer_with_resolved_path(buf: Any, unexpanded_path: str) -> None:
+            """Update buffer text and cursor position with resolved path."""
+            buf.text = unexpanded_path
+            buf.cursor_position = len(unexpanded_path)
+
+        def get_expanded_path_from_result(result: Tuple[str, str]) -> Tuple[str, str]:
+            """Extract unexpanded and expanded paths from resolution result."""
+            unexpanded_path, expanded_path = result
+            return unexpanded_path, expanded_path
+
+        def resolve_and_update_buffer_or_use_text(buf: Any, text: str) -> Tuple[str, str]:
+            """Resolve fuzzy path and update buffer, or return original text."""
+            result = resolve_fuzzy_path(text)
+            if result:
+                unexpanded_path, expanded_path = get_expanded_path_from_result(result)
+                update_buffer_with_resolved_path(buf, unexpanded_path)
+                return unexpanded_path, expanded_path
+            else:
+                return text, text
+
+        def determine_validation_path_for_completion_mode(buf: Any, text: str) -> str:
+            """Determine validation path based on completion mode."""
+            if no_path_completion:
+                return select_validation_path_for_no_completion(text)
+            else:
+                _, validation_path = resolve_and_update_buffer_or_use_text(buf, text)
+                return validation_path
+
+        def expand_home_variables(validation_path: str) -> str:
+            """Expand $HOME variable in path string."""
+            return validation_path.replace('$HOME', str(Path.home()))
+
+        def expand_tilde_in_path(path_str: str) -> Path:
+            """Expand tilde in path string to Path object."""
+            return Path(path_str).expanduser()
+
+        def make_absolute_if_relative(path: Path) -> Path:
+            """Make path absolute if it's relative."""
+            if not path.is_absolute():
+                return Path(os.getcwd()) / path
+            else:
+                return path
+
+        def set_error_and_abort(message: str) -> None:
+            """Set error message in state (never returns normally)."""
+            state.error_message = message
+
+        def check_path_exists_or_abort(path: Path) -> bool:
+            """Check if path exists, return True if exists, False if not."""
+            return path.exists()
+
+        def check_path_is_directory_or_abort(path: Path) -> bool:
+            """Check if path is a directory, return True if directory, False if not."""
+            return path.is_dir()
+
+        def check_path_is_pem_file(path: Path) -> bool:
+            """Check if path has .pem extension."""
+            return path.suffix == '.pem'
+
+        def validate_path_exists_or_abort(path: Path) -> bool:
+            """Validate path exists, return False and set error if not."""
+            if not check_path_exists_or_abort(path):
+                set_error_and_abort("not a valid *.pem file name")
+                return False
+            return True
+
+        def validate_path_not_directory_or_abort(path: Path) -> bool:
+            """Validate path is not a directory, return False and set error if it is."""
+            if check_path_is_directory_or_abort(path):
+                set_error_and_abort("this is a directory, not a *.pem file")
+                return False
+            return True
+
+        def validate_path_is_pem_or_abort(path: Path) -> bool:
+            """Validate path is a .pem file, return False and set error if not."""
+            if not check_path_is_pem_file(path):
+                set_error_and_abort("not a valid *.pem file name")
+                return False
+            return True
+
+        def perform_path_validation_checks(path: Path) -> bool:
+            """Perform all path validation checks, return False on any failure."""
+            return (validate_path_exists_or_abort(path) and
+                   validate_path_not_directory_or_abort(path) and
+                   validate_path_is_pem_or_abort(path))
+
+        def validate_resolved_path_or_set_error(validation_path: str) -> bool:
+            """Validate resolved path through all checks, return False on failure."""
+            try:
+                expanded = expand_home_variables(validation_path)
+                path = expand_tilde_in_path(expanded)
+                absolute_path = make_absolute_if_relative(path)
+                return perform_path_validation_checks(absolute_path)
+            except Exception:
+                set_error_and_abort("not a valid *.pem file name")
+                return False
+
+        def handle_path_mode_validation(buf: Any, text: str) -> bool:
+            """Handle validation for path modes, return False if validation fails."""
+            if check_if_text_is_empty(text):
+                return False
+            validation_path = determine_validation_path_for_completion_mode(buf, text)
+            return validate_resolved_path_or_set_error(validation_path)
+
+        def extract_first_line_from_error(error: ValidationError) -> str:
+            """Extract first line from ValidationError message."""
+            return str(error).split('\n')[0]
+
+        def validate_with_custom_validator_or_set_error(text: str) -> bool:
+            """Validate using custom validator, return False if validation fails."""
+            if validator_func:
+                try:
+                    validator_func(text)
+                    return True
+                except ValidationError as e:
+                    set_error_and_abort(extract_first_line_from_error(e))
+                    return False
+            return True
+
+        def handle_non_path_mode_validation(text: str) -> bool:
+            """Handle validation for non-path modes, return False if validation fails."""
+            return validate_with_custom_validator_or_set_error(text)
+
+        def perform_validation_by_mode(buf: Any, text: str) -> bool:
+            """Perform validation based on current mode, return False if validation fails."""
+            if check_if_path_mode_enabled():
+                return handle_path_mode_validation(buf, text)
+            else:
+                return handle_non_path_mode_validation(text)
+
+        def accept_buffer_input(buf: Any) -> None:
+            """Accept the buffer input."""
+            buf.validate_and_handle()
+
+        def validate_and_accept_if_valid(buf: Any, text: str) -> None:
+            """Validate input and accept if valid."""
+            if perform_validation_by_mode(buf, text):
+                accept_buffer_input(buf)
+
         @kb.add(Keys.ControlM)  # Enter key
         def handle_enter(event: Any) -> None:
             """Handle Enter key - validate before accepting."""
             buf = event.app.current_buffer
             text = buf.text.strip()
+            validate_and_accept_if_valid(buf, text)
 
-            if enable_path_completion or no_path_completion:
-                # For path input, resolve fuzzy path to actual path (or validate directly)
-                if not text:
-                    return
+        def check_if_should_flash_error(buf: Any) -> bool:
+            """Check if error should be flashed."""
+            return bool(enable_path_completion and state.error_message and not buf.complete_state)
 
-                if no_path_completion:
-                    # No completion mode: just validate the path as-is
-                    validation_path = text
-                else:
-                    # Try to resolve the fuzzy path
-                    result = resolve_fuzzy_path(text)
-                    if result:
-                        unexpanded_path, expanded_path = result
-                        # Use unexpanded path for display, expanded for validation
-                        buf.text = unexpanded_path
-                        buf.cursor_position = len(unexpanded_path)
-                        text = unexpanded_path
-                        validation_path = expanded_path
-                    else:
-                        validation_path = text
+        def enable_flash_error_state() -> None:
+            """Enable flash error state."""
+            state.flash_error = True
 
-                try:
-                    # Expand ~ and $HOME first
-                    expanded = validation_path.replace('$HOME', str(Path.home()))
-                    path = Path(expanded).expanduser()
+        def create_unflash_callback(event: Any) -> Callable[[], None]:
+            """Create callback to unflash error after delay."""
+            def unflash() -> None:
+                time.sleep(0.5)
+                state.flash_error = False
+                event.app.invalidate()
+            return unflash
 
-                    # Resolve relative to current directory if needed
-                    if not path.is_absolute():
-                        path = Path(os.getcwd()) / path
+        def check_if_flash_thread_is_inactive() -> bool:
+            """Check if flash thread is None or not alive."""
+            return state.flash_thread is None or not state.flash_thread.is_alive()
 
-                    # Check if it exists
-                    if not path.exists():
-                        state.error_message = "not a valid *.pem file name"
-                        return
+        def start_unflash_thread(unflash_callback: Callable[[], None]) -> None:
+            """Start unflash thread with callback."""
+            state.flash_thread = threading.Thread(target=unflash_callback, daemon=True)
+            state.flash_thread.start()
 
-                    # Check if it's a directory
-                    if path.is_dir():
-                        state.error_message = "this is a directory, not a *.pem file"
-                        return
+        def start_unflash_thread_if_inactive(event: Any) -> None:
+            """Start unflash thread if no active thread exists."""
+            if check_if_flash_thread_is_inactive():
+                unflash_callback = create_unflash_callback(event)
+                start_unflash_thread(unflash_callback)
 
-                    # Must be a .pem file
-                    if path.suffix != '.pem':
-                        state.error_message = "not a valid *.pem file name"
-                        return
+        def perform_error_flash(event: Any) -> None:
+            """Perform error flash animation."""
+            enable_flash_error_state()
+            start_unflash_thread_if_inactive(event)
 
-                except Exception:
-                    state.error_message = "not a valid *.pem file name"
-                    return
+        def perform_normal_tab_completion(buf: Any) -> None:
+            """Perform normal tab completion."""
+            buf.complete_next()
+
+        def handle_tab_based_on_state(buf: Any, event: Any) -> None:
+            """Handle tab key based on current state."""
+            if check_if_should_flash_error(buf):
+                perform_error_flash(event)
             else:
-                # For non-path inputs, validate using custom validator
-                if validator_func:
-                    try:
-                        validator_func(text)
-                    except ValidationError as e:
-                        state.error_message = str(e).split('\n')[0]  # First line only
-                        return
-
-            # Accept the input
-            buf.validate_and_handle()
+                perform_normal_tab_completion(buf)
 
         @kb.add(Keys.ControlI)  # Tab key
         def handle_tab(event: Any) -> None:
             """Handle Tab key - show completions or flash error."""
             buf = event.app.current_buffer
+            handle_tab_based_on_state(buf, event)
 
-            if enable_path_completion and state.error_message and not buf.complete_state:
-                # Flash the error
-                state.flash_error = True
+        selected_validator = select_validator_for_mode(enable_path_completion, validator)
+        selected_toolbar = select_toolbar_for_modes(enable_path_completion, no_path_completion, validator_func, bottom_toolbar)
 
-                def unflash() -> None:
-                    time.sleep(0.5)
-                    state.flash_error = False
-                    event.app.invalidate()
-
-                if state.flash_thread is None or not state.flash_thread.is_alive():
-                    state.flash_thread = threading.Thread(target=unflash, daemon=True)
-                    state.flash_thread.start()
-            else:
-                # Normal tab completion
-                buf.complete_next()
-
-        # Create a session with the desired settings
         session: PromptSession[str] = PromptSession(
             message=prompt_text,
             editing_mode=editing_mode,
-            completer=completer,  # type: ignore  # FuzzyPemCompleter implements Completer protocol
+            completer=completer,
             complete_while_typing=enable_path_completion,
             output=output,
             enable_history_search=False,
-            validator=validator if enable_path_completion else None,
+            validator=selected_validator,
             validate_while_typing=enable_path_completion,
             key_bindings=kb,
-            bottom_toolbar=bottom_toolbar if enable_path_completion or no_path_completion or validator_func else None,
-            reserve_space_for_menu=8  # Reserve space for completion menu
+            bottom_toolbar=selected_toolbar,
+            reserve_space_for_menu=8
         )
 
-        # In no_path_completion mode, clear errors when text changes (only validate on Enter)
-        if no_path_completion:
-            def on_text_changed(_: Any) -> None:
-                """Clear error message when user types (will validate again on Enter)."""
-                state.error_message = ""
-
-            session.default_buffer.on_text_changed += on_text_changed
-
-        # Add auto-expansion handler for path completion
-        if enable_path_completion and completer:
-            def on_text_changed(_: Any) -> None:
-                """Auto-expand single directory matches (but not ~)."""
-                buf = session.default_buffer
-                text = buf.text
-
-                # Don't auto-expand if completing
-                if buf.complete_state:
-                    return
-
-                # Check if there's exactly one match and it's a directory
-                # (but don't auto-expand ~ or $HOME)
-                if text and not text.endswith('/') and '/' not in text[:-1] and text not in ('~', '$HOME'):
-                    try:
-                        completions = list(completer.get_completions(buf.document, None))
-
-                        # If exactly one completion and it's a directory, auto-expand it
-                        if len(completions) == 1:
-                            completion = completions[0]
-                            if completion.text.endswith('/'):
-                                # Replace buffer text with the completion
-                                buf.text = completion.text
-                                buf.cursor_position = len(completion.text)
-                    except Exception:
-                        pass
-
-            session.default_buffer.on_text_changed += on_text_changed
-
-        result = session.prompt()
-        return result.strip()
+        attach_text_handlers_for_modes(session, no_path_completion, enable_path_completion, completer, state)
+        return prompt_with_session(session)
 
     except ImportError as e:
-        # Fallback to basic input if prompt_toolkit is not available
-        eprint(f"Warning: Advanced input features unavailable ({e})")
-        eprint(prompt_text, end='')
-        try:
-            return input().strip()
-        except (EOFError, KeyboardInterrupt):
-            eprint()
-            fatal_error("Input cancelled by user")
+        return handle_import_error_with_fallback(e, prompt_text)
     except (EOFError, KeyboardInterrupt):
-        eprint()
-        fatal_error("Input cancelled by user")
+        handle_interrupt_error()
 
 
 def validate_and_collect_errors(
