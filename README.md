@@ -437,39 +437,6 @@ For interactive path completion features, `prompt-toolkit` and `rapidfuzz` are r
 .venv/bin/pip install prompt-toolkit rapidfuzz
 ```
 
-### HTTP Error Messages
-
-When the script encounters HTTP errors from the GitHub API, it will display:
-- The HTTP status code and reason (e.g., "HTTP Error 401: Unauthorized")
-- Response headers (if using `--headers` or `--debug`)
-- The complete response body (formatted JSON when applicable)
-
-Common HTTP errors:
-
-### "HTTP Error 401: Unauthorized"
-
-This usually means:
-- Your Client ID is incorrect
-- Your PEM file doesn't match the GitHub App
-- The JWT has expired (increase `--jwt-expiry` if needed)
-- The `'iss'` claim in the JWT is invalid (must match your Client ID)
-
-### "HTTP Error 404: Not Found"
-
-This usually means:
-- The Installation ID is incorrect or doesn't exist
-- The API URL is wrong (check if you need `--api-url` for GitHub Enterprise)
-- The GitHub App is not installed on the target organization/repository
-
-### "HTTP Error 406: Not Acceptable"
-
-This can indicate:
-- The API endpoint doesn't exist or is invalid
-- Your User-Agent header is being rejected by the server
-- Required headers are missing or malformed
-
-**Note**: The same endpoint may return different error codes (403 vs 406) depending on the User-Agent header used. The script includes a User-Agent header by default, but curl commands generated with `--show-me-the-curl` do not include this header, which may lead to different responses.
-
 ## Finding Your GitHub App Credentials
 
 ### Client ID
@@ -497,75 +464,6 @@ This can indicate:
 ```bash
 curl -H "Authorization: Bearer YOUR_JWT" \
   https://api.github.com/app/installations
-```
-
-## Use Cases
-
-### CI/CD Pipelines
-
-Generate installation tokens for GitHub Actions or other CI/CD systems:
-
-```bash
-# In your CI script
-TOKEN=$(./gh-tokengen \
-  --quiet \
-  --client-id "$GH_APP_CLIENT_ID" \
-  --pem-path "$GH_APP_PEM_PATH" \
-  --installation-id "$GH_APP_INSTALLATION_ID")
-
-# Use the token
-git clone https://x-access-token:$TOKEN@github.com/org/repo.git
-```
-
-### Automated Repository Access
-
-Access private repositories in automation scripts:
-
-```bash
-eval $(./gh-tokengen \
-  --output-format env \
-  --quiet \
-  --client-id Iv1.abc123 \
-  --pem-path app.pem \
-  --installation-id 12345678)
-
-# Use GitHub API with the token
-curl -H "Authorization: Bearer $GITHUB_TOKEN" \
-  https://api.github.com/repos/owner/repo/contents/file.txt
-```
-
-### Token Refresh Scripts
-
-Create a wrapper script that automatically refreshes tokens:
-
-```bash
-#!/bin/bash
-# refresh-token.sh
-
-gh-tokengen \
-  --quiet \
-  --output-format env \
-  --client-id "$CLIENT_ID" \
-  --pem-path "$PEM_PATH" \
-  --installation-id "$INSTALL_ID" > /tmp/github-token.env
-
-source /tmp/github-token.env
-rm /tmp/github-token.env
-
-# Now $GITHUB_TOKEN is available
-```
-
-### Testing and Development
-
-Use `--dry-run` and `--debug` to test your configuration:
-
-```bash
-./gh-tokengen \
-  --dry-run \
-  --debug \
-  --client-id Iv1.abc123 \
-  --pem-path app.pem \
-  --installation-id 12345678
 ```
 
 ## More information
