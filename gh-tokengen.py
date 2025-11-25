@@ -2172,6 +2172,11 @@ Examples:
         help='Generate and output only the JWT (do not exchange for installation token)'
     )
     parser.add_argument(
+        '--show-me-the-curl',
+        action='store_true',
+        help='Output the equivalent curl command instead of making the API call'
+    )
+    parser.add_argument(
         '--no-fuzzy',
         action='store_true',
         help='Disable fuzzy matching; use prefix-only matching for path completion'
@@ -2195,6 +2200,12 @@ Examples:
 
     if args.jwt and args.installation_id:
         parser.error("--jwt and --installation-id are mutually exclusive")
+
+    if args.show_me_the_curl and args.jwt:
+        parser.error("--show-me-the-curl and --jwt are mutually exclusive")
+
+    if args.show_me_the_curl and not args.installation_id:
+        parser.error("--show-me-the-curl requires --installation-id")
 
     return args
 
@@ -2538,9 +2549,29 @@ def output_installation_token(args: argparse.Namespace, token_data: Dict[str, An
             output_token(token_data, args.output_format, False, args.timestamp_format)
 
 
+def output_curl_command(args: argparse.Namespace, client_id: str, pem_path: Path, installation_id: str) -> None:
+    """Generate JWT and output the equivalent curl command."""
+    jwt_token, _, _ = generate_jwt(
+        client_id=client_id,
+        pem_path=pem_path,
+        expiry_seconds=args.jwt_expiry,
+        debug=False
+    )
+
+    api_url = args.api_url.rstrip('/')
+    endpoint = f"{api_url}/app/installations/{installation_id}/access_tokens"
+
+    curl_command = f'curl -i -L -X POST -H "Authorization: Bearer {jwt_token}" -H "Accept: application/vnd.github+json" {endpoint}'
+    print(curl_command)
+    sys.exit(0)
+
+
 def generate_token(args: argparse.Namespace, client_id: str, pem_path: Path, installation_id: Optional[str]) -> None:
     """Generate either JWT or installation token based on mode."""
-    if args.jwt:
+    if args.show_me_the_curl:
+        assert installation_id is not None
+        output_curl_command(args, client_id, pem_path, installation_id)
+    elif args.jwt:
         generate_and_output_jwt(args, client_id, pem_path)
     else:
         assert installation_id is not None
