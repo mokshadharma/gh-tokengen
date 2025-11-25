@@ -398,17 +398,29 @@ def make_api_request(
             return data, response_headers
 
     except HTTPError as e:
-        error_body = e.read().decode('utf-8')
-        if debug:
-            eprint(f"DEBUG: HTTP Error body: {error_body}")
-            import traceback
-            traceback.print_exc()
+        # Read the error response body
+        error_body = ""
         try:
-            error_data = json.loads(error_body)
-            error_msg = error_data.get('message', error_body)
-        except (json.JSONDecodeError, ValueError):
-            error_msg = error_body
-        fatal_error(f"HTTP {e.code} error from GitHub API: {error_msg}")
+            error_body = e.read().decode('utf-8')
+        except Exception:
+            pass
+        
+        # Display HTTP status
+        eprint(f"\nHTTP Error {e.code}: {e.reason}")
+        
+        # Display response headers if requested
+        if show_headers or debug:
+            eprint("\nResponse headers:")
+            for key, value in e.headers.items():
+                eprint(f"  {key}: {value}")
+        
+        # Display error body if present
+        if error_body:
+            eprint(f"\nResponse body:")
+            eprint(error_body)
+        
+        # Exit with error status
+        sys.exit(1)
     except URLError as e:
         if debug:
             import traceback
