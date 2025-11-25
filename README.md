@@ -16,11 +16,14 @@ This tool is useful for developers and system administrators who need to program
 - **Installation Token Exchange**: Automatically exchange JWTs for installation access tokens
 - **Multiple Output Formats**: Output tokens as plain text, JSON, environment variables, or HTTP headers
 - **Interactive Mode**: Prompts for required inputs if not provided via command-line arguments
+- **Interactive Path Completion**: Fuzzy file path autocompletion for PEM files with vi/emacs mode support
 - **Input Validation**: Validates Client IDs, Installation IDs, and PEM file formats
 - **Debug Mode**: Detailed logging of JWT generation and API requests (with token masking for security)
 - **Dry Run**: Test your configuration without making actual API calls
+- **Curl Command Generation**: Generate equivalent curl commands for manual execution
 - **GitHub Enterprise Support**: Works with custom GitHub Enterprise API URLs
 - **Flexible Token Expiry**: Configure JWT expiration time (1-600 seconds)
+- **User-Friendly Error Handling**: Clear HTTP error messages with formatted response bodies
 
 ## Requirements
 
@@ -220,6 +223,25 @@ Use with GitHub Enterprise Server:
   --installation-id 12345678
 ```
 
+#### 11. Generate Curl Command
+
+Get the equivalent curl command instead of making the API call directly:
+
+```bash
+./gh-tokengen \
+  --show-me-the-curl \
+  --client-id Iv1.abc123def456 \
+  --pem-path app.pem \
+  --installation-id 12345678
+```
+
+This will output something like:
+```bash
+curl -i -L -X POST -H "Authorization: Bearer eyJhbGc..." -H "Accept: application/vnd.github+json" https://api.github.com/app/installations/12345678/access_tokens
+```
+
+You can then copy and paste this command to execute it manually, which is useful for debugging or testing.
+
 ## Command-Line Options
 
 ### Required Inputs
@@ -252,11 +274,14 @@ Use with GitHub Enterprise Server:
 | Option | Description |
 |--------|-------------|
 | `--jwt` | Generate only JWT, don't exchange for installation token |
+| `--show-me-the-curl` | Output the equivalent curl command instead of making the API call |
 | `--debug` | Enable verbose debug output |
 | `--quiet` | Suppress all output except the token |
 | `--dry-run` | Validate inputs without making API calls |
 | `--headers` | Show HTTP response headers |
 | `--force` | Skip input validation checks |
+| `--no-fuzzy` | Disable fuzzy matching for path completion (use prefix-only matching) |
+| `--no-path-completion` | Disable path completion entirely (validate file after input) |
 
 ### Other Options
 
@@ -352,6 +377,25 @@ Authorization: Bearer ghs_1234567890abcdefghijklmnopqrstuvwxyz
 
 5. **Quiet Mode**: Use `--quiet` when you need just the token, but be aware this makes the output more sensitive.
 
+## Interactive Mode Features
+
+When you run the script without providing all required arguments, it will enter interactive mode with advanced features:
+
+### Path Completion
+
+- **Fuzzy matching**: Type partial filenames and the script will find matching `.pem` files (e.g., typing "git" might match "my-github-app.pem")
+- **Directory navigation**: Use `/` to navigate directories, with automatic expansion of single matches
+- **Home directory support**: Use `~` or `$HOME` for paths starting from your home directory
+- **Vi/Emacs modes**: Automatically detects your preferred editing mode from `~/.inputrc`
+- **Visual feedback**: Shows error messages in a bottom toolbar when paths don't match
+
+### Disabling Path Completion
+
+If you prefer simpler input or encounter issues with the advanced features:
+
+- `--no-fuzzy`: Use prefix-only matching instead of fuzzy matching
+- `--no-path-completion`: Disable path completion entirely and validate after input
+
 ## Troubleshooting
 
 ### "Virtual environment not found"
@@ -371,6 +415,8 @@ Ensure the path to your PEM file is correct. You can use absolute paths or `~` f
 --pem-path ~/path/to/your-app.pem
 ```
 
+In interactive mode, you can use fuzzy path completion to find your PEM file easily.
+
 ### "Client ID should start with 'Iv1.'"
 
 GitHub App Client IDs have a specific format. Make sure you're using the Client ID, not the App ID. Find it in your GitHub App settings under "General" → "Client ID".
@@ -386,18 +432,43 @@ Install the required Python packages inside the virtual environment:
 .venv/bin/pip install PyJWT cryptography
 ```
 
-### "HTTP 401 error"
+For interactive path completion features, `prompt-toolkit` and `rapidfuzz` are recommended but optional:
+```bash
+.venv/bin/pip install prompt-toolkit rapidfuzz
+```
+
+### HTTP Error Messages
+
+When the script encounters HTTP errors from the GitHub API, it will display:
+- The HTTP status code and reason (e.g., "HTTP Error 401: Unauthorized")
+- Response headers (if using `--headers` or `--debug`)
+- The complete response body (formatted JSON when applicable)
+
+Common HTTP errors:
+
+### "HTTP Error 401: Unauthorized"
 
 This usually means:
 - Your Client ID is incorrect
 - Your PEM file doesn't match the GitHub App
 - The JWT has expired (increase `--jwt-expiry` if needed)
+- The `'iss'` claim in the JWT is invalid (must match your Client ID)
 
-### "HTTP 404 error"
+### "HTTP Error 404: Not Found"
 
 This usually means:
 - The Installation ID is incorrect or doesn't exist
 - The API URL is wrong (check if you need `--api-url` for GitHub Enterprise)
+- The GitHub App is not installed on the target organization/repository
+
+### "HTTP Error 406: Not Acceptable"
+
+This can indicate:
+- The API endpoint doesn't exist or is invalid
+- Your User-Agent header is being rejected by the server
+- Required headers are missing or malformed
+
+**Note**: The same endpoint may return different error codes (403 vs 406) depending on the User-Agent header used. The script includes a User-Agent header by default, but curl commands generated with `--show-me-the-curl` do not include this header, which may lead to different responses.
 
 ## Finding Your GitHub App Credentials
 
