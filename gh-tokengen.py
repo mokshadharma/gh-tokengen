@@ -417,7 +417,13 @@ def make_api_request(
         # Display error body if present
         if error_body:
             eprint(f"\nResponse body:")
-            eprint(error_body)
+            # Try to pretty-print JSON, otherwise display verbatim
+            try:
+                error_data = json.loads(error_body)
+                eprint(json.dumps(error_data, indent=2))
+            except (json.JSONDecodeError, ValueError):
+                # Not JSON, display verbatim
+                eprint(error_body)
         
         # Exit with error status
         sys.exit(1)
