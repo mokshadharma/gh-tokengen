@@ -1292,6 +1292,45 @@ def handle_interrupt_error() -> NoReturn:
     fatal_error("Input cancelled by user")
 
 
+def import_prompt_toolkit_modules() -> Dict[str, Any]:
+    """
+    Import prompt_toolkit modules and return them in a dictionary.
+
+    Returns:
+        Dictionary containing imported modules and classes.
+
+    Raises:
+        ImportError: If prompt_toolkit or dependencies are not available.
+    """
+    try:
+        from prompt_toolkit import PromptSession
+        from prompt_toolkit.enums import EditingMode
+        from prompt_toolkit.output import create_output
+        from prompt_toolkit.validation import Validator, ValidationError as PTValidationError
+        from prompt_toolkit.formatted_text import HTML
+        from prompt_toolkit.key_binding import KeyBindings
+        from prompt_toolkit.keys import Keys
+        import os
+        import threading
+        import time
+
+        return {
+            'PromptSession': PromptSession,
+            'EditingMode': EditingMode,
+            'create_output': create_output,
+            'Validator': Validator,
+            'PTValidationError': PTValidationError,
+            'HTML': HTML,
+            'KeyBindings': KeyBindings,
+            'Keys': Keys,
+            'os': os,
+            'threading': threading,
+            'time': time
+        }
+    except ImportError as e:
+        raise ImportError(f"Required prompt_toolkit modules not found: {e}")
+
+
 def prompt_for_input(
     prompt_text: str,
     enable_path_completion: bool = False,
@@ -1314,16 +1353,18 @@ def prompt_for_input(
     """
     no_fuzzy, enable_path_completion = normalize_completion_flags(no_path_completion, no_fuzzy, enable_path_completion)
     try:
-        from prompt_toolkit import PromptSession
-        from prompt_toolkit.enums import EditingMode
-        from prompt_toolkit.output import create_output
-        from prompt_toolkit.validation import Validator, ValidationError as PTValidationError
-        from prompt_toolkit.formatted_text import HTML
-        from prompt_toolkit.key_binding import KeyBindings
-        from prompt_toolkit.keys import Keys
-        import os
-        import threading
-        import time
+        modules = import_prompt_toolkit_modules()
+        PromptSession = modules['PromptSession']
+        EditingMode = modules['EditingMode']
+        create_output = modules['create_output']
+        Validator = modules['Validator']
+        PTValidationError = modules['PTValidationError']
+        HTML = modules['HTML']
+        KeyBindings = modules['KeyBindings']
+        Keys = modules['Keys']
+        os = modules['os']
+        threading = modules['threading']
+        time = modules['time']
 
         mode_str = detect_editing_mode_from_inputrc()
         editing_mode = select_editing_mode_by_string(mode_str, EditingMode)
@@ -1405,8 +1446,7 @@ def prompt_for_input(
             target_lower = target_str.lower()
             query_idx = 0
             for char in target_lower:
-                if query_idx < len(query_lower) and char == query_lower[query_idx]:
-                    query_idx += 1
+                query_idx += (query_idx < len(query_lower) and char == query_lower[query_idx])
             return query_idx == len(query_lower)
 
         def find_prefix_matches_case_sensitive(query: str, candidates: List[Path]) -> List[Path]:
@@ -1421,10 +1461,7 @@ def prompt_for_input(
         def select_prefix_matching_strategy(query: str, candidates: List[Path]) -> List[Path]:
             """Select and apply prefix matching strategy based on query case."""
             query_has_upper = any(c.isupper() for c in query)
-            if query_has_upper:
-                return find_prefix_matches_case_sensitive(query, candidates)
-            else:
-                return find_prefix_matches_case_insensitive(query, candidates)
+            return find_prefix_matches_case_sensitive(query, candidates) if query_has_upper else find_prefix_matches_case_insensitive(query, candidates)
 
         def find_fuzzy_matches(query: str, candidates: List[Path]) -> List[Path]:
             """Find candidates matching query using fuzzy (ordered characters) matching."""
@@ -1432,10 +1469,7 @@ def prompt_for_input(
 
         def apply_matching_strategy(query: str, candidates: List[Path]) -> List[Path]:
             """Apply appropriate matching strategy (prefix or fuzzy) based on mode."""
-            if no_fuzzy:
-                return select_prefix_matching_strategy(query, candidates)
-            else:
-                return find_fuzzy_matches(query, candidates)
+            return select_prefix_matching_strategy(query, candidates) if no_fuzzy else find_fuzzy_matches(query, candidates)
 
         def find_exact_directory_match(part: str, subdirs: List[Path]) -> Optional[Path]:
             """Find exact name match in subdirectory list."""
@@ -1834,7 +1868,7 @@ def prompt_for_input(
                 if skip_empty_or_special_part(part):
                     continue
 
-                is_final = (i == len(parts) - 1)
+                is_final = ( i == len(parts) - 1)
                 candidates = collect_candidates_for_segment(current_dir, is_final)
                 matched = resolve_segment_match(candidates, part)
 
