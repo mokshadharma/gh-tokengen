@@ -1375,6 +1375,11 @@ def expand_home_in_path(text: str) -> Path:
     return Path(expanded).expanduser()
 
 
+def make_path_absolute_from_cwd(path: Path, cwd: Path) -> Path:
+    """Make path absolute if relative, using current working directory."""
+    return path if path.is_absolute() else cwd / path
+
+
 def prompt_for_input(
     prompt_text: str,
     enable_path_completion: bool = False,
@@ -1428,10 +1433,6 @@ def prompt_for_input(
             """Check if text is empty (validation should be skipped)."""
             return not text
 
-        def make_path_absolute_from_cwd(path: Path) -> Path:
-            """Make path absolute if relative, using current working directory."""
-            return path if path.is_absolute() else Path(os.getcwd()) / path
-
         def validate_path_exists_or_fail(path: Path) -> None:
             """Validate that path exists, raise error if not."""
             if not path.exists():
@@ -1452,7 +1453,7 @@ def prompt_for_input(
 
         def perform_no_path_completion_validation(expanded_path: Path) -> None:
             """Complete validation workflow for no_path_completion mode."""
-            absolute_path = make_path_absolute_from_cwd(expanded_path)
+            absolute_path = make_path_absolute_from_cwd(expanded_path, Path(os.getcwd()))
             validate_path_exists_or_fail(absolute_path)
             validate_path_is_file_or_fail(absolute_path)
             validate_path_is_readable_or_fail(absolute_path)
