@@ -10,7 +10,6 @@ NOTE:  This program is NOT supported or endorsed by GitHub.  Use at own risk.
 
 import argparse
 import json
-import os
 import sys
 import time
 import tempfile
@@ -482,7 +481,7 @@ url = {url}
                 eprint(f"[DEBUG] Final URL: {effective_url}")
 
             if debug:
-                eprint(f"\n[DEBUG] Final response:")
+                eprint("\n[DEBUG] Final response:")
                 eprint(f"[DEBUG]   Status: {http_code}")
                 eprint(f"[DEBUG]   URL: {effective_url}")
 
@@ -499,7 +498,7 @@ url = {url}
 
                 # Display error body if present
                 if response_body:
-                    eprint(f"\nResponse body:")
+                    eprint("\nResponse body:")
                     # Try to pretty-print JSON, otherwise display verbatim
                     try:
                         error_data: Dict[str, Any] = json.loads(response_body)
