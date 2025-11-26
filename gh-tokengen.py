@@ -1347,6 +1347,22 @@ def create_validation_state() -> ValidationState:
     return ValidationState()
 
 
+def create_bottom_toolbar_func(state: ValidationState, HTML: Any) -> Callable[[], Any]:
+    """
+    Create bottom toolbar function that captures state.
+
+    Args:
+        state: The validation state object
+        HTML: The prompt_toolkit HTML class
+
+    Returns:
+        A function that returns the toolbar content
+    """
+    def bottom_toolbar() -> Any:
+        return create_toolbar_display(state.flash_error, state.error_message, HTML)
+    return bottom_toolbar
+
+
 def prompt_for_input(
     prompt_text: str,
     enable_path_completion: bool = False,
@@ -1389,8 +1405,7 @@ def prompt_for_input(
 
         state = create_validation_state()
 
-        def bottom_toolbar() -> Any:
-            return create_toolbar_display(state.flash_error, state.error_message, HTML)
+        bottom_toolbar = create_bottom_toolbar_func(state, HTML)
 
         # Helper functions for validation logic
         def clear_error_state() -> None:
