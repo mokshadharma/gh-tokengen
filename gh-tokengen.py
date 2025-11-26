@@ -1331,6 +1331,22 @@ def import_prompt_toolkit_modules() -> Dict[str, Any]:
         raise ImportError(f"Required prompt_toolkit modules not found: {e}")
 
 
+
+class ValidationState:
+    """State container for validation UI feedback."""
+
+    def __init__(self) -> None:
+        self.error_message: str = ""
+        self.flash_error: bool = False
+        self.flash_thread: Optional[threading.Thread] = None
+        self.yank_buffer: str = ""
+
+
+def create_validation_state() -> ValidationState:
+    """Create a new ValidationState instance."""
+    return ValidationState()
+
+
 def prompt_for_input(
     prompt_text: str,
     enable_path_completion: bool = False,
@@ -1371,14 +1387,7 @@ def prompt_for_input(
         completer = create_completer_for_path_mode(enable_path_completion, no_fuzzy, os)
         output = create_output(stdout=sys.stderr)
 
-        class ValidationState:
-            def __init__(self) -> None:
-                self.error_message: str = ""
-                self.flash_error: bool = False
-                self.flash_thread: Optional[threading.Thread] = None
-                self.yank_buffer: str = ""
-
-        state = ValidationState()
+        state = create_validation_state()
 
         def bottom_toolbar() -> Any:
             return create_toolbar_display(state.flash_error, state.error_message, HTML)
