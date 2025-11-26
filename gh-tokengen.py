@@ -1363,6 +1363,12 @@ def create_bottom_toolbar_func(state: ValidationState, HTML: Any) -> Callable[[]
     return bottom_toolbar
 
 
+def raise_validation_error_with_state(message: str, state: ValidationState, validation_error_class: type) -> NoReturn:
+    """Set error state and raise validation error (never returns)."""
+    state.error_message = message
+    raise validation_error_class(message=message)
+
+
 def prompt_for_input(
     prompt_text: str,
     enable_path_completion: bool = False,
@@ -1425,20 +1431,15 @@ def prompt_for_input(
             """Make path absolute if relative, using current working directory."""
             return path if path.is_absolute() else Path(os.getcwd()) / path
 
-        def raise_validation_error_with_state(message: str) -> NoReturn:
-            """Set error state and raise validation error (never returns)."""
-            state.error_message = message
-            raise PTValidationError(message=message)
-
         def validate_path_exists_or_fail(path: Path) -> None:
             """Validate that path exists, raise error if not."""
             if not path.exists():
-                raise_validation_error_with_state("file does not exist")
+                raise_validation_error_with_state("file does not exist", state, PTValidationError)
 
         def validate_path_is_file_or_fail(path: Path) -> None:
             """Validate that path is a regular file, raise error if not."""
             if not path.is_file():
-                raise_validation_error_with_state("not a regular file")
+                raise_validation_error_with_state("not a regular file", state, PTValidationError)
 
         def validate_path_is_readable_or_fail(path: Path) -> None:
             """Validate that path is readable, raise error if not."""
@@ -1446,7 +1447,7 @@ def prompt_for_input(
                 with open(path, 'r'):
                     pass
             except (PermissionError, OSError):
-                raise_validation_error_with_state("file is not readable")
+                raise_validation_error_with_state("file is not readable", state, PTValidationError)
 
         def perform_no_path_completion_validation(expanded_path: Path) -> None:
             """Complete validation workflow for no_path_completion mode."""
@@ -1536,12 +1537,12 @@ def prompt_for_input(
         def validate_directory_exists_for_query_or_fail(current_dir: Path, final_query: str) -> None:
             """Validate directory exists when there's a final query to match."""
             if not current_dir.exists() and final_query:
-                raise_validation_error_with_state("no match")
+                raise_validation_error_with_state("no match", state, PTValidationError)
 
         def validate_match_found_for_query_or_fail(matched: Optional[Path], final_query: str) -> None:
             """Validate that a match was found when there's a final query."""
             if not matched and final_query:
-                raise_validation_error_with_state("no match")
+                raise_validation_error_with_state("no match", state, PTValidationError)
 
         def navigate_one_directory_segment(i: int, part: str, current_dir: Path, final_query: str) -> Path:
             """Navigate through one directory segment, returning updated current directory."""
@@ -1570,23 +1571,23 @@ def prompt_for_input(
                 return [item for item in current_dir.iterdir()
                        if item.is_dir() or (item.is_file() and item.suffix == '.pem')]
             except PermissionError:
-                raise_validation_error_with_state("no match")
+                raise_validation_error_with_state("no match", state, PTValidationError)
 
         def validate_directory_exists_or_fail(current_dir: Path) -> None:
             """Validate directory exists, raise 'no match' error if not."""
             if not current_dir.exists():
-                raise_validation_error_with_state("no match")
+                raise_validation_error_with_state("no match", state, PTValidationError)
 
         def validate_candidates_not_empty_or_fail(candidates: List[Path]) -> None:
             """Validate that candidates list is not empty, raise error if empty."""
             if not candidates:
-                raise_validation_error_with_state("no match")
+                raise_validation_error_with_state("no match", state, PTValidationError)
 
         def validate_query_has_match_or_fail(query: str, candidates: List[Path]) -> None:
             """Validate that query matches at least one candidate, raise error if not."""
             matches = apply_matching_strategy(query, candidates)
             if not matches:
-                raise_validation_error_with_state("no match")
+                raise_validation_error_with_state("no match", state, PTValidationError)
 
         def validate_final_query_segment(final_query: str, current_dir: Path) -> None:
             """Validate final query segment against candidates in directory."""
