@@ -35,6 +35,7 @@ DEFAULT_USER_AGENT = f"GitHubAppAuth-Script/{__version__}"
 
 class ValidationError(Exception):
     """Raised when input validation fails."""
+
     pass
 
 
@@ -88,7 +89,7 @@ def validate_pem_file(pem_path: Path, force: bool) -> None:
     # Always check readability (even with --force)
     try:
         # Actually attempt to read the file to verify permissions
-        content = pem_path.read_text()
+        content: str = pem_path.read_text()
     except PermissionError:
         raise ValidationError(
             f"Permission denied when trying to read '{pem_path}'.\n"
@@ -262,7 +263,7 @@ def generate_jwt(
     client_id: str,
     pem_path: Path,
     expiry_seconds: int,
-    debug: bool
+    debug: bool,
 ) -> Tuple[str, int, int]:
     """
     Generate a JWT for GitHub App authentication.
@@ -384,7 +385,7 @@ def make_api_request(
         debug_print(f"Making API request to: {url}", debug)
         debug_print(f"Request headers:\n{format_headers_for_display(headers)}", debug)
 
-    response_body = ""
+    response_body: str = ""
 
     # Use TemporaryDirectory for maximum safety - it guarantees:
     # 1. Only files within the created directory can be affected
@@ -392,19 +393,19 @@ def make_api_request(
     # 3. The directory is created with secure permissions
     with tempfile.TemporaryDirectory(prefix='gh-tokengen-') as temp_dir:
         # Verify the temp directory is where we expect it to be (defense in depth)
-        temp_dir_path = Path(temp_dir)
-        system_temp = Path(tempfile.gettempdir())
+        temp_dir_path: Path = Path(temp_dir)
+        system_temp: Path = Path(tempfile.gettempdir())
         if not temp_dir_path.is_relative_to(system_temp):
             fatal_error(f"Temp directory {temp_dir} is not within system temp directory {system_temp}")
 
         # Create file paths within our isolated temp directory
-        body_file = temp_dir_path / 'response_body'
-        config_file = temp_dir_path / 'curl_config'
-        headers_file = temp_dir_path / 'response_headers'
+        body_file: Path = temp_dir_path / 'response_body'
+        config_file: Path = temp_dir_path / 'curl_config'
+        headers_file: Path = temp_dir_path / 'response_headers'
 
         try:
             # Write curl config file with secure permissions
-            config_content = f"""silent
+            config_content: str = f"""silent
 show-error
 location
 request = POST
@@ -424,7 +425,7 @@ url = {url}
             if debug:
                 debug_print("Executing curl request...", debug)
 
-            result = subprocess.run(
+            result: subprocess.CompletedProcess[str] = subprocess.run(
                 ['curl', '--config', str(config_file)],
                 capture_output=True,
                 text=True
@@ -445,7 +446,7 @@ url = {url}
             # Read response headers from temp file
             # When following redirects, this file contains all response header blocks
             # (one for each response in the redirect chain)
-            raw_headers = ""
+            raw_headers: str = ""
             if headers_file.exists():
                 raw_headers = headers_file.read_text()
 
@@ -455,23 +456,25 @@ url = {url}
             if raw_headers:
                 # Split into blocks (separated by blank lines)
                 # and parse the last block for the response_headers dict
-                blocks = raw_headers.strip().split('\r\n\r\n')
+                blocks: List[str] = raw_headers.strip().split('\r\n\r\n')
                 if not blocks or not blocks[-1]:
                     # Try with just \n\n in case of different line endings
                     blocks = raw_headers.strip().split('\n\n')
 
                 if blocks:
-                    last_block = blocks[-1]
+                    last_block: str = blocks[-1]
                     for line in last_block.split('\n'):
                         line = line.rstrip('\r')  # Handle \r\n line endings
                         if ':' in line:
+                            key: str
+                            value: str
                             key, value = line.split(':', 1)
                             response_headers[key.strip()] = value.strip()
 
             # Extract status code and other info from curl metadata
-            http_code = curl_metadata.get('http_code', 0)
-            effective_url = curl_metadata.get('url_effective', url)
-            num_redirects = curl_metadata.get('num_redirects', 0)
+            http_code: int = curl_metadata.get('http_code', 0)
+            effective_url: str = curl_metadata.get('url_effective', url)
+            num_redirects: int = curl_metadata.get('num_redirects', 0)
 
             # Debug output for redirects
             if debug and num_redirects > 0:
@@ -499,7 +502,7 @@ url = {url}
                     eprint(f"\nResponse body:")
                     # Try to pretty-print JSON, otherwise display verbatim
                     try:
-                        error_data = json.loads(response_body)
+                        error_data: Dict[str, Any] = json.loads(response_body)
                         eprint(json.dumps(error_data, indent=2))
                     except (json.JSONDecodeError, ValueError):
                         # Not JSON, display verbatim
@@ -572,8 +575,8 @@ def format_expiration(
             minutes: int = int(delta.total_seconds() / 60)
             return f"in {minutes} minutes"
         else:  # human (default)
-            now_utc = datetime.now(timezone.utc)
-            delta_time: timedelta = exp_dt - now_utc
+            now_utc_human: datetime = datetime.now(timezone.utc)
+            delta_time: timedelta = exp_dt - now_utc_human
             minutes_left: int = int(delta_time.total_seconds() / 60)
             formatted_time: str = exp_dt.strftime('%Y-%m-%d %H:%M:%S UTC')
             return f"in {minutes_left} minutes ({formatted_time})"
@@ -587,7 +590,7 @@ def format_permissions(permissions: Dict[str, str]) -> str:
     if not permissions:
         return "  (none)"
 
-    lines = []
+    lines: List[str] = []
     for resource, level in sorted(permissions.items()):
         lines.append(f"  {resource}: {level}")
     return "\n".join(lines)
@@ -786,7 +789,7 @@ class FuzzyPemCompleter:
 
     def _expand_path(self, path_str: str) -> Path:
         """Expand ~ and $HOME in path string."""
-        expanded = path_str.replace('$HOME', str(Path.home()))
+        expanded: str = path_str.replace('$HOME', str(Path.home()))
         return Path(expanded).expanduser()
 
     def _get_candidates(self, directory: Path, is_final_segment: bool) -> List[Path]:
@@ -838,7 +841,7 @@ class FuzzyPemCompleter:
 
     def _select_prefix_match_strategy(self, query: str, candidates: List[Path]) -> List[Path]:
         """Select and apply appropriate prefix matching strategy based on query case."""
-        query_has_upper = self._check_query_has_uppercase(query)
+        query_has_upper: bool = self._check_query_has_uppercase(query)
         return (self._find_case_sensitive_prefix_matches(query, candidates)
                 if query_has_upper
                 else self._find_case_insensitive_prefix_matches(query, candidates))
@@ -867,9 +870,9 @@ class FuzzyPemCompleter:
 
     def _check_ordered_characters(self, query_str: str, target_str: str) -> bool:
         """Check if all characters in query appear in order in target."""
-        query_lower = query_str.lower()
-        target_lower = target_str.lower()
-        query_idx = 0
+        query_lower: str = query_str.lower()
+        target_lower: str = target_str.lower()
+        query_idx: int = 0
         for char in target_lower:
             if query_idx < len(query_lower) and char == query_lower[query_idx]:
                 query_idx += 1
@@ -901,8 +904,8 @@ class FuzzyPemCompleter:
 
     def _apply_prefix_bonus_to_match(self, name: str, score: float, query: str, lookup: Dict[str, Path]) -> Tuple[str, float, Path]:
         """Apply prefix bonus to a single match and return result tuple."""
-        path = lookup[name]
-        adjusted_score = self._calculate_adjusted_score(name, query, score)
+        path: Path = lookup[name]
+        adjusted_score: float = self._calculate_adjusted_score(name, query, score)
         return (name, adjusted_score, path)
 
     def _apply_prefix_bonuses(self, matches: List[Tuple[str, float, int]], query: str, lookup: Dict[str, Path]) -> List[Tuple[str, float, Path]]:
@@ -911,9 +914,9 @@ class FuzzyPemCompleter:
 
     def _continue_with_fuzzy_scoring(self, valid_candidates: List[Path], query: str) -> List[Tuple[str, float, Path]]:
         """Continue with fuzzy scoring after validation."""
-        names = self._extract_names_from_candidates(valid_candidates)
-        matches = self._perform_fuzzy_scoring(query, names)
-        lookup = self._create_name_to_path_lookup(valid_candidates)
+        names: List[str] = self._extract_names_from_candidates(valid_candidates)
+        matches: List[Tuple[str, float, int]] = self._perform_fuzzy_scoring(query, names)
+        lookup: Dict[str, Path] = self._create_name_to_path_lookup(valid_candidates)
         return self._apply_prefix_bonuses(matches, query, lookup)
 
     def _perform_fuzzy_matching_workflow(self, valid_candidates: List[Path], query: str) -> List[Tuple[str, float, Path]]:
@@ -938,8 +941,8 @@ class FuzzyPemCompleter:
 
     def _separate_pem_files(self, results: List[Tuple[str, float, Path]]) -> Tuple[List[Tuple[str, float, Path]], List[Tuple[str, float, Path]]]:
         """Separate results into PEM files and other matches."""
-        pem_results = [(name, score, path) for name, score, path in results if self._check_is_pem_file(path)]
-        other_results = [(name, score, path) for name, score, path in results if not self._check_is_pem_file(path)]
+        pem_results: List[Tuple[str, float, Path]] = [(name, score, path) for name, score, path in results if self._check_is_pem_file(path)]
+        other_results: List[Tuple[str, float, Path]] = [(name, score, path) for name, score, path in results if not self._check_is_pem_file(path)]
         return pem_results, other_results
 
     def _sort_by_score_and_name(self, results: List[Tuple[str, float, Path]]) -> None:
@@ -948,6 +951,8 @@ class FuzzyPemCompleter:
 
     def _organize_and_sort_results(self, results: List[Tuple[str, float, Path]]) -> List[Tuple[str, float, Path]]:
         """Separate PEM files, sort each group, and combine with PEM files first."""
+        pem_results: List[Tuple[str, float, Path]]
+        other_results: List[Tuple[str, float, Path]]
         pem_results, other_results = self._separate_pem_files(results)
         self._sort_by_score_and_name(pem_results)
         self._sort_by_score_and_name(other_results)
@@ -955,7 +960,7 @@ class FuzzyPemCompleter:
 
     def _continue_with_matching(self, query: str, candidates: List[Path]) -> List[Tuple[str, float, Path]]:
         """Continue with matching strategy selection and result organization."""
-        matching_results = self._select_matching_strategy(query, candidates)
+        matching_results: List[Tuple[str, float, Path]] = self._select_matching_strategy(query, candidates)
         return self._organize_and_sort_results(matching_results)
 
     def _dispatch_to_matching_or_return_early(self, empty_query_result: Union[List[Tuple[str, float, Path]], Any], query: str, candidates: List[Path]) -> List[Tuple[str, float, Path]]:
@@ -996,11 +1001,11 @@ class FuzzyPemCompleter:
 
     def _navigate_one_directory_part(self, current_dir: Path, part: str) -> Optional[Path]:
         """Navigate through one directory part, returning new directory or None if navigation fails."""
-        subdirs = [p for p in self._get_candidates(current_dir, False)]
+        subdirs: List[Path] = [p for p in self._get_candidates(current_dir, False)]
         if not subdirs:
             return None
 
-        matches = self._fuzzy_match(part, subdirs)
+        matches: List[Tuple[str, float, Path]] = self._fuzzy_match(part, subdirs)
         if matches:
             return matches[0][2]
         else:
@@ -1008,7 +1013,7 @@ class FuzzyPemCompleter:
 
     def _navigate_directory_parts_with_early_exit(self, dir_parts: List[str], initial_dir: Path) -> Optional[Path]:
         """Navigate through directory parts, returns None if navigation should abort early."""
-        current_dir = initial_dir
+        current_dir: Path = initial_dir
 
         for i, part in enumerate(dir_parts):
             if self._should_skip_directory_part(i, part):
@@ -1017,7 +1022,7 @@ class FuzzyPemCompleter:
             if not part:
                 return None
 
-            new_dir = self._navigate_one_directory_part(current_dir, part)
+            new_dir: Optional[Path] = self._navigate_one_directory_part(current_dir, part)
             if new_dir is None:
                 return None
 
@@ -1027,8 +1032,8 @@ class FuzzyPemCompleter:
 
     def _separate_pem_and_directories(self, candidates: List[Path]) -> Tuple[List[Path], List[Path]]:
         """Separate candidates into PEM files and directories."""
-        pem_files = [c for c in candidates if c.is_file() and c.suffix.lower() == '.pem']
-        directories = [c for c in candidates if c.is_dir()]
+        pem_files: List[Path] = [c for c in candidates if c.is_file() and c.suffix.lower() == '.pem']
+        directories: List[Path] = [c for c in candidates if c.is_dir()]
         return pem_files, directories
 
     def _sort_by_natural_order(self, paths: List[Path]) -> None:
@@ -1037,6 +1042,7 @@ class FuzzyPemCompleter:
 
     def _create_completion_for_path(self, path: Path, start_position: int, Completion: Any) -> Any:
         """Create a Completion object for a path (handles directory vs file logic internally)."""
+        completion_text: str
         if path.is_dir():
             completion_text = path.name + '/'
         else:
@@ -1064,7 +1070,7 @@ class FuzzyPemCompleter:
 
     def _yield_fuzzy_query_completions(self, final_query: str, candidates: List[Path], Completion: Any) -> Iterator[Any]:
         """Handle completions when query is non-empty (fuzzy matching)."""
-        fuzzy_matches = self._fuzzy_match(final_query, candidates)
+        fuzzy_matches: List[Tuple[str, float, Path]] = self._fuzzy_match(final_query, candidates)
 
         for name, score, path in fuzzy_matches:
             yield self._create_completion_for_path(path, -len(final_query), Completion)
@@ -1078,17 +1084,17 @@ class FuzzyPemCompleter:
 
     def _handle_slash_path_completions(self, text: str, Completion: Any) -> Iterator[Any]:
         """Handle completions for paths containing slashes."""
-        parts = text.split('/')
-        final_query = parts[-1]
-        dir_parts = parts[:-1]
+        parts: List[str] = text.split('/')
+        final_query: str = parts[-1]
+        dir_parts: List[str] = parts[:-1]
 
-        initial_dir = self._determine_initial_directory(text)
-        current_dir = self._navigate_directory_parts_with_early_exit(dir_parts, initial_dir)
+        initial_dir: Path = self._determine_initial_directory(text)
+        current_dir: Optional[Path] = self._navigate_directory_parts_with_early_exit(dir_parts, initial_dir)
 
         if current_dir is None:
             return
 
-        candidates = self._get_candidates(current_dir, True)
+        candidates: List[Path] = self._get_candidates(current_dir, True)
         yield from self._dispatch_query_completions(final_query, candidates, Completion)
 
     def _should_block_tilde_completion(self, text: str) -> bool:
@@ -1104,8 +1110,8 @@ class FuzzyPemCompleter:
         if self._should_block_tilde_completion(text):
             return
 
-        candidates = self._get_candidates(self.base_dir, True)
-        matches = self._fuzzy_match(text, candidates)
+        candidates: List[Path] = self._get_candidates(self.base_dir, True)
+        matches: List[Tuple[str, float, Path]] = self._fuzzy_match(text, candidates)
 
         for name, score, path in matches:
             yield self._create_completion_for_path(path, -len(text), Completion)
@@ -1130,7 +1136,7 @@ class FuzzyPemCompleter:
         """
         from prompt_toolkit.completion import Completion
 
-        text = document.text_before_cursor
+        text: str = document.text_before_cursor
         yield from self._dispatch_completions_by_path_type(text, Completion)
 
     async def get_completions_async(self, document: Any, complete_event: Any) -> Any:
@@ -1156,13 +1162,13 @@ def detect_editing_mode_from_inputrc() -> str:
     Returns:
         'vi' or 'emacs' (defaults to 'emacs' if not specified or file doesn't exist)
     """
-    inputrc_path = Path.home() / '.inputrc'
+    inputrc_path: Path = Path.home() / '.inputrc'
 
     if not inputrc_path.exists():
         return 'emacs'
 
     try:
-        content = inputrc_path.read_text()
+        content: str = inputrc_path.read_text()
         # Look for "set editing-mode vi" or "set editing-mode emacs"
         # Handle various whitespace and comment scenarios
         for line in content.splitlines():
@@ -1170,7 +1176,7 @@ def detect_editing_mode_from_inputrc() -> str:
             line = line.split('#')[0].strip()
 
             # Match "set editing-mode vi" or "set editing-mode emacs"
-            match = re.match(r'^set\s+editing-mode\s+(vi|emacs)\s*$', line, re.IGNORECASE)
+            match: Optional[re.Match[str]] = re.match(r'^set\s+editing-mode\s+(vi|emacs)\s*$', line, re.IGNORECASE)
             if match:
                 return match.group(1).lower()
     except Exception:
@@ -2331,7 +2337,7 @@ def collect_inputs(args: argparse.Namespace) -> Tuple[str, Path, str, Optional[s
     Returns:
         Tuple of (client_id, pem_path, pem_path_str, installation_id)
     """
-    is_interactive = not args.client_id or not args.pem_path or (not args.jwt and not args.installation_id)
+    is_interactive: bool = not args.client_id or not args.pem_path or (not args.jwt and not args.installation_id)
 
     if is_interactive:
         return collect_inputs_interactively(args)
@@ -2350,8 +2356,8 @@ def prompt_for_client_id(force: bool) -> str:
 
 def prompt_for_pem_path(no_path_completion: bool, no_fuzzy: bool) -> str:
     """Prompt user for PEM file path."""
-    use_path_completion = not no_path_completion
-    use_fuzzy = not (no_fuzzy or no_path_completion)
+    use_path_completion: bool = not no_path_completion
+    use_fuzzy: bool = not (no_fuzzy or no_path_completion)
 
     return prompt_for_input(
         "Enter path to private key PEM file: ",
@@ -2622,16 +2628,16 @@ def show_token_success_info(args: argparse.Namespace, token_data: Dict[str, Any]
         debug_print("Successfully obtained installation token!", args.debug)
         debug_print(f"Token: {mask_token(token_data.get('token', ''))}", args.debug)
 
-        expires_at_str = token_data.get('expires_at', '')
+        expires_at_str: str = token_data.get('expires_at', '')
         if expires_at_str:
             debug_print(f"Expires at: {expires_at_str}", args.debug)
 
-        permissions_dict = token_data.get('permissions', {})
+        permissions_dict: Dict[str, str] = token_data.get('permissions', {})
         if permissions_dict:
             eprint("\n[DEBUG] Permissions granted:")
             eprint(format_permissions(permissions_dict))
 
-        repo_selection = token_data.get('repository_selection', '')
+        repo_selection: str = token_data.get('repository_selection', '')
         if repo_selection:
             debug_print(f"Repository selection: {repo_selection}", args.debug)
 
@@ -2647,9 +2653,9 @@ def output_installation_token(args: argparse.Namespace, token_data: Dict[str, An
     else:
         if args.output_format == 'text':
             print(f"Token: {token_data.get('token', '')}\n")
-            expires_at = token_data.get('expires_at', '')
+            expires_at: str = token_data.get('expires_at', '')
             if expires_at:
-                formatted_exp = format_expiration(expires_at, args.timestamp_format)
+                formatted_exp: str = format_expiration(expires_at, args.timestamp_format)
                 print(f"Expires: {formatted_exp}")
         else:
             output_token(token_data, args.output_format, False, args.timestamp_format)
@@ -2657,6 +2663,7 @@ def output_installation_token(args: argparse.Namespace, token_data: Dict[str, An
 
 def output_curl_command(args: argparse.Namespace, client_id: str, pem_path: Path, installation_id: str) -> None:
     """Generate JWT and output the equivalent curl command."""
+    jwt_token: str
     jwt_token, _, _ = generate_jwt(
         client_id=client_id,
         pem_path=pem_path,
@@ -2664,10 +2671,10 @@ def output_curl_command(args: argparse.Namespace, client_id: str, pem_path: Path
         debug=False
     )
 
-    api_url = args.api_url.rstrip('/')
-    endpoint = f"{api_url}/app/installations/{installation_id}/access_tokens"
+    api_url: str = args.api_url.rstrip('/')
+    endpoint: str = f"{api_url}/app/installations/{installation_id}/access_tokens"
 
-    curl_command = f'curl -i -L -X POST -H "Authorization: Bearer {jwt_token}" -H "Accept: application/vnd.github+json" {endpoint}'
+    curl_command: str = f'curl -i -L -X POST -H "Authorization: Bearer {jwt_token}" -H "Accept: application/vnd.github+json" {endpoint}'
     print(curl_command)
     sys.exit(0)
 
