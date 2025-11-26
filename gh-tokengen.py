@@ -1475,6 +1475,14 @@ def resolve_directory_segment(subdirs: List[Path], part: str, no_fuzzy: bool) ->
         return find_first_matching_directory(subdirs, part, no_fuzzy)
 
 
+def get_subdirectories_from_path(current_dir: Path) -> List[Path]:
+    """Get list of subdirectories from path, empty list if path doesn't exist."""
+    if current_dir.exists():
+        return [p for p in current_dir.iterdir() if p.is_dir()]
+    else:
+        return []
+
+
 def prompt_for_input(
     prompt_text: str,
     enable_path_completion: bool = False,
@@ -1552,13 +1560,6 @@ def prompt_for_input(
             validate_path_exists_or_fail(absolute_path)
             validate_path_is_file_or_fail(absolute_path)
             validate_path_is_readable_or_fail(absolute_path)
-
-        def get_subdirectories_from_path(current_dir: Path) -> List[Path]:
-            """Get list of subdirectories from path, empty list if path doesn't exist."""
-            if current_dir.exists():
-                return [p for p in current_dir.iterdir() if p.is_dir()]
-            else:
-                return []
 
         def check_skip_directory_part(i: int, part: str) -> bool:
             """Determine if directory part should be skipped during navigation."""
@@ -1886,6 +1887,8 @@ def prompt_for_input(
             """Build the final result tuple with unexpanded and expanded paths."""
             unexpanded = '/'.join(unexpanded_parts)
             return (unexpanded, str(resolved_path))
+
+
 
         def navigate_through_path_segments(parts: List[str], start_idx: int, initial_dir: Path, unexpanded_parts: List[str]) -> Optional[Tuple[Path, List[str]]]:
             """Navigate through all path segments, resolving each one."""
