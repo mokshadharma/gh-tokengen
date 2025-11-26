@@ -15,8 +15,6 @@ import sys
 import time
 import tempfile
 import subprocess
-import atexit
-import signal
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, NoReturn, Callable, List, Union, Iterator
@@ -386,38 +384,26 @@ def make_api_request(
         debug_print(f"Making API request to: {url}", debug)
         debug_print(f"Request headers:\n{format_headers_for_display(headers)}", debug)
 
-    # Create temp files for curl output
-    temp_files: List[str] = []
-    body_file = None
-    config_file = None
-    
-    def cleanup_temp_files() -> None:
-        """Clean up temporary files."""
-        for f in temp_files:
-            try:
-                Path(f).unlink(missing_ok=True)
-            except Exception:
-                pass
-    
-    # Register cleanup for normal exit and signals
-    atexit.register(cleanup_temp_files)
-    original_sigint = signal.signal(signal.SIGINT, lambda s, f: (cleanup_temp_files(), sys.exit(130)))
-    original_sigterm = signal.signal(signal.SIGTERM, lambda s, f: (cleanup_temp_files(), sys.exit(143)))
-    
     response_body = ""
     
-    try:
-        # Create temp file for response body
-        body_fd, body_file = tempfile.mkstemp(prefix='gh-tokengen-body-')
-        temp_files.append(body_file)
-        os.close(body_fd)
+    # Use TemporaryDirectory for maximum safety - it guarantees:
+    # 1. Only files within the created directory can be affected
+    # 2. Automatic cleanup on normal exit, exceptions, and context manager exit
+    # 3. The directory is created with secure permissions
+    with tempfile.TemporaryDirectory(prefix='gh-tokengen-') as temp_dir:
+        # Verify the temp directory is where we expect it to be (defense in depth)
+        temp_dir_path = Path(temp_dir)
+        system_temp = Path(tempfile.gettempdir())
+        if not temp_dir_path.is_relative_to(system_temp):
+            fatal_error(f"Temp directory {temp_dir} is not within system temp directory {system_temp}")
         
-        # Create temp file for curl config
-        config_fd, config_file = tempfile.mkstemp(prefix='gh-tokengen-config-')
-        temp_files.append(config_file)
+        # Create file paths within our isolated temp directory
+        body_file = temp_dir_path / 'response_body'
+        config_file = temp_dir_path / 'curl_config'
         
-        # Write curl config file
-        config_content = f"""silent
+        try:
+            # Write curl config file with secure permissions
+            config_content = f"""silent
 show-error
 location
 request = POST
@@ -430,126 +416,119 @@ header = "User-Agent: {user_agent}"
 header = "X-GitHub-Api-Version: 2022-11-28"
 url = {url}
 """
-        os.write(config_fd, config_content.encode('utf-8'))
-        os.close(config_fd)
-        
-        # Run curl
-        if debug:
-            debug_print("Executing curl request...", debug)
-        
-        result = subprocess.run(
-            ['curl', '--config', config_file],
-            capture_output=True,
-            text=True
-        )
-        
-        # Parse curl's JSON metadata output
-        curl_metadata: Dict[str, Any] = {}
-        if result.stdout:
-            try:
-                curl_metadata = json.loads(result.stdout)
-            except json.JSONDecodeError:
-                pass
-        
-        # Read response body from temp file
-        response_body = ""
-        try:
-            response_body = Path(body_file).read_text()
-        except Exception:
-            pass
-        
-        # Extract status code and other info from curl metadata
-        http_code = curl_metadata.get('http_code', 0)
-        effective_url = curl_metadata.get('url_effective', url)
-        num_redirects = curl_metadata.get('num_redirects', 0)
-        
-        # Parse response headers from curl metadata
-        response_headers: Dict[str, str] = {}
-        # curl's %{json} includes headers in a specific format
-        # We need to extract them from the response_headers field if available
-        if 'response_headers' in curl_metadata:
-            # curl provides this as a string, need to parse it
-            header_str = curl_metadata.get('response_headers', '')
-            if header_str:
-                for line in header_str.split('\r\n'):
-                    if ':' in line:
-                        key, value = line.split(':', 1)
-                        response_headers[key.strip()] = value.strip()
-        
-        # Debug output for redirects
-        if debug and num_redirects > 0:
-            eprint(f"\n[DEBUG] Followed {num_redirects} redirect(s)")
-            eprint(f"[DEBUG] Final URL: {effective_url}")
-        
-        if debug:
-            eprint(f"\n[DEBUG] Final response:")
-            eprint(f"[DEBUG]   Status: {http_code}")
-            eprint(f"[DEBUG]   URL: {effective_url}")
-        
-        # Check for HTTP errors
-        if http_code >= 400 or result.returncode != 0:
-            # Display HTTP status
-            eprint(f"\nHTTP Error {http_code}")
+            config_file.write_text(config_content)
             
-            # Display response headers if requested
+            # Run curl
+            if debug:
+                debug_print("Executing curl request...", debug)
+            
+            result = subprocess.run(
+                ['curl', '--config', str(config_file)],
+                capture_output=True,
+                text=True
+            )
+            
+            # Parse curl's JSON metadata output
+            curl_metadata: Dict[str, Any] = {}
+            if result.stdout:
+                try:
+                    curl_metadata = json.loads(result.stdout)
+                except json.JSONDecodeError:
+                    pass
+            
+            # Read response body from temp file
+            if body_file.exists():
+                response_body = body_file.read_text()
+            
+            # Extract status code and other info from curl metadata
+            http_code = curl_metadata.get('http_code', 0)
+            effective_url = curl_metadata.get('url_effective', url)
+            num_redirects = curl_metadata.get('num_redirects', 0)
+            
+            # Parse response headers from curl metadata
+            response_headers: Dict[str, str] = {}
+            # curl's %{json} includes headers in a specific format
+            # We need to extract them from the response_headers field if available
+            if 'response_headers' in curl_metadata:
+                # curl provides this as a string, need to parse it
+                header_str = curl_metadata.get('response_headers', '')
+                if header_str:
+                    for line in header_str.split('\r\n'):
+                        if ':' in line:
+                            key, value = line.split(':', 1)
+                            response_headers[key.strip()] = value.strip()
+            
+            # Debug output for redirects
+            if debug and num_redirects > 0:
+                eprint(f"\n[DEBUG] Followed {num_redirects} redirect(s)")
+                eprint(f"[DEBUG] Final URL: {effective_url}")
+            
+            if debug:
+                eprint(f"\n[DEBUG] Final response:")
+                eprint(f"[DEBUG]   Status: {http_code}")
+                eprint(f"[DEBUG]   URL: {effective_url}")
+            
+            # Check for HTTP errors
+            if http_code >= 400 or result.returncode != 0:
+                # Display HTTP status
+                eprint(f"\nHTTP Error {http_code}")
+                
+                # Display response headers if requested
+                if show_headers or debug:
+                    if response_headers:
+                        eprint("\nResponse headers:")
+                        for key, value in response_headers.items():
+                            eprint(f"  {key}: {value}")
+                
+                # Display error body if present
+                if response_body:
+                    eprint(f"\nResponse body:")
+                    # Try to pretty-print JSON, otherwise display verbatim
+                    try:
+                        error_data = json.loads(response_body)
+                        eprint(json.dumps(error_data, indent=2))
+                    except (json.JSONDecodeError, ValueError):
+                        # Not JSON, display verbatim
+                        eprint(response_body)
+                elif result.stderr:
+                    eprint(f"\ncurl error: {result.stderr}")
+                
+                # Exit with error status
+                sys.exit(1)
+            
+            # Success path
             if show_headers or debug:
                 if response_headers:
                     eprint("\nResponse headers:")
                     for key, value in response_headers.items():
                         eprint(f"  {key}: {value}")
             
-            # Display error body if present
-            if response_body:
-                eprint(f"\nResponse body:")
-                # Try to pretty-print JSON, otherwise display verbatim
-                try:
-                    error_data = json.loads(response_body)
-                    eprint(json.dumps(error_data, indent=2))
-                except (json.JSONDecodeError, ValueError):
-                    # Not JSON, display verbatim
-                    eprint(response_body)
-            elif result.stderr:
-                eprint(f"\ncurl error: {result.stderr}")
+            if debug:
+                eprint("\nResponse body:")
+                eprint(response_body)
+                eprint()
+            elif show_headers:
+                eprint()
             
-            # Exit with error status
-            sys.exit(1)
-        
-        # Success path
-        if show_headers or debug:
-            if response_headers:
-                eprint("\nResponse headers:")
-                for key, value in response_headers.items():
-                    eprint(f"  {key}: {value}")
-        
-        if debug:
-            eprint("\nResponse body:")
-            eprint(response_body)
-            eprint()
-        elif show_headers:
-            eprint()
-        
-        data: Dict[str, Any] = json.loads(response_body)
-        return data, response_headers
+            data: Dict[str, Any] = json.loads(response_body)
+            return data, response_headers
 
-    except FileNotFoundError:
-        fatal_error("curl is not installed or not found in PATH")
-    except json.JSONDecodeError as e:
-        if debug:
-            eprint(f"[DEBUG] Failed to parse response as JSON: {e}")
-            if response_body:
-                eprint(f"[DEBUG] Response body: {response_body}")
-        fatal_error(f"Failed to parse API response as JSON: {e}")
-    except Exception as e:
-        if debug:
-            import traceback
-            traceback.print_exc()
-        fatal_error(f"Unexpected error during API request: {e}")
-    finally:
-        # Restore signal handlers
-        signal.signal(signal.SIGINT, original_sigint)
-        signal.signal(signal.SIGTERM, original_sigterm)
-        atexit.unregister(cleanup_temp_files)
-        cleanup_temp_files()
+        except FileNotFoundError:
+            fatal_error("curl is not installed or not found in PATH")
+        except json.JSONDecodeError as e:
+            if debug:
+                eprint(f"[DEBUG] Failed to parse response as JSON: {e}")
+                if response_body:
+                    eprint(f"[DEBUG] Response body: {response_body}")
+            fatal_error(f"Failed to parse API response as JSON: {e}")
+        except Exception as e:
+            if debug:
+                import traceback
+                traceback.print_exc()
+            fatal_error(f"Unexpected error during API request: {e}")
+    
+    # This should never be reached due to fatal_error calls, but satisfies type checker
+    fatal_error("Unexpected code path in make_api_request")
 
 
 def format_expiration(
