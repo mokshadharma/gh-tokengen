@@ -1466,6 +1466,15 @@ def find_first_matching_directory(subdirs: List[Path], part: str, no_fuzzy: bool
         return None
 
 
+def resolve_directory_segment(subdirs: List[Path], part: str, no_fuzzy: bool) -> Optional[Path]:
+    """Resolve a single directory path segment to a matched directory."""
+    exact = find_exact_directory_match(subdirs, part)
+    if exact:
+        return exact
+    else:
+        return find_first_matching_directory(subdirs, part, no_fuzzy)
+
+
 def prompt_for_input(
     prompt_text: str,
     enable_path_completion: bool = False,
@@ -1544,20 +1553,6 @@ def prompt_for_input(
             validate_path_is_file_or_fail(absolute_path)
             validate_path_is_readable_or_fail(absolute_path)
 
-
-
-
-
-
-
-        def resolve_directory_segment(part: str, subdirs: List[Path]) -> Optional[Path]:
-            """Resolve a single directory path segment to a matched directory."""
-            exact = find_exact_directory_match(subdirs, part)
-            if exact:
-                return exact
-            else:
-                return find_first_matching_directory(subdirs, part, no_fuzzy)
-
         def get_subdirectories_from_path(current_dir: Path) -> List[Path]:
             """Get list of subdirectories from path, empty list if path doesn't exist."""
             if current_dir.exists():
@@ -1590,7 +1585,7 @@ def prompt_for_input(
 
             validate_directory_exists_for_query_or_fail(current_dir, final_query)
             subdirs = get_subdirectories_from_path(current_dir)
-            matched = resolve_directory_segment(part, subdirs)
+            matched = resolve_directory_segment(subdirs, part, no_fuzzy)
             validate_match_found_for_query_or_fail(matched, final_query)
             if matched:
                 return matched
