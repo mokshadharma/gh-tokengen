@@ -810,7 +810,7 @@ class FuzzyPemCompleter:
             for item in directory.iterdir():
                 if item.is_dir():
                     candidates.append(item)
-                elif is_final_segment and item.is_file() and item.suffix == '.pem':
+                elif is_final_segment and item.is_file() and item.suffix.lower() == '.pem':
                     candidates.append(item)
         except PermissionError:
             pass
@@ -1398,6 +1398,57 @@ def expand_home_in_path(text: str) -> Path:
     return Path(expanded).expanduser()
 
 
+def has_ordered_characters_match(query_str: str, target_str: str) -> bool:
+    """Check if query characters appear in order in target (case-insensitive)."""
+    query_lower = query_str.lower()
+    target_lower = target_str.lower()
+    query_idx = 0
+    for char in target_lower:
+        query_idx += (query_idx < len(query_lower) and char == query_lower[query_idx])
+    return query_idx == len(query_lower)
+
+
+def find_prefix_matches_case_sensitive(query: str, candidates: List[Path]) -> List[Path]:
+    """Find candidates matching query prefix with case sensitivity."""
+    return [c for c in candidates if c.name.startswith(query)]
+
+
+def find_prefix_matches_case_insensitive(query: str, candidates: List[Path]) -> List[Path]:
+    """Find candidates matching query prefix without case sensitivity."""
+    query_lower = query.lower()
+    return [c for c in candidates if c.name.lower().startswith(query_lower)]
+
+
+def select_prefix_matching_strategy(query: str, candidates: List[Path]) -> List[Path]:
+    """Select and apply prefix matching strategy based on query case."""
+    query_has_upper = any(c.isupper() for c in query)
+    return find_prefix_matches_case_sensitive(query, candidates) if query_has_upper else find_prefix_matches_case_insensitive(query, candidates)
+
+
+def find_fuzzy_matches(query: str, candidates: List[Path]) -> List[Path]:
+    """Find candidates matching query using fuzzy (ordered characters) matching."""
+    return [c for c in candidates if has_ordered_characters_match(query, c.name)]
+
+
+def apply_matching_strategy(query: str, candidates: List[Path], no_fuzzy: bool) -> List[Path]:
+    """Apply appropriate matching strategy (prefix or fuzzy) based on mode."""
+    return select_prefix_matching_strategy(query, candidates) if no_fuzzy else find_fuzzy_matches(query, candidates)
+
+
+def match_query_against_target(query_str: str, target_str: str, no_fuzzy: bool) -> bool:
+    """Match query against target based on current fuzzy mode setting."""
+    if no_fuzzy:
+        # Prefix matching logic
+        query_has_upper = any(c.isupper() for c in query_str)
+        if query_has_upper:
+            return target_str.startswith(query_str)
+        else:
+            return target_str.lower().startswith(query_str.lower())
+    else:
+        # Fuzzy matching logic
+        return has_ordered_characters_match(query_str, target_str)
+
+
 def prompt_for_input(
     prompt_text: str,
     enable_path_completion: bool = False,
@@ -1476,36 +1527,11 @@ def prompt_for_input(
             validate_path_is_file_or_fail(absolute_path)
             validate_path_is_readable_or_fail(absolute_path)
 
-        def has_ordered_characters_match(query_str: str, target_str: str) -> bool:
-            """Check if query characters appear in order in target (case-insensitive)."""
-            query_lower = query_str.lower()
-            target_lower = target_str.lower()
-            query_idx = 0
-            for char in target_lower:
-                query_idx += (query_idx < len(query_lower) and char == query_lower[query_idx])
-            return query_idx == len(query_lower)
 
-        def find_prefix_matches_case_sensitive(query: str, candidates: List[Path]) -> List[Path]:
-            """Find candidates matching query prefix with case sensitivity."""
-            return [c for c in candidates if c.name.startswith(query)]
 
-        def find_prefix_matches_case_insensitive(query: str, candidates: List[Path]) -> List[Path]:
-            """Find candidates matching query prefix without case sensitivity."""
-            query_lower = query.lower()
-            return [c for c in candidates if c.name.lower().startswith(query_lower)]
 
-        def select_prefix_matching_strategy(query: str, candidates: List[Path]) -> List[Path]:
-            """Select and apply prefix matching strategy based on query case."""
-            query_has_upper = any(c.isupper() for c in query)
-            return find_prefix_matches_case_sensitive(query, candidates) if query_has_upper else find_prefix_matches_case_insensitive(query, candidates)
 
-        def find_fuzzy_matches(query: str, candidates: List[Path]) -> List[Path]:
-            """Find candidates matching query using fuzzy (ordered characters) matching."""
-            return [c for c in candidates if has_ordered_characters_match(query, c.name)]
 
-        def apply_matching_strategy(query: str, candidates: List[Path]) -> List[Path]:
-            """Apply appropriate matching strategy (prefix or fuzzy) based on mode."""
-            return select_prefix_matching_strategy(query, candidates) if no_fuzzy else find_fuzzy_matches(query, candidates)
 
         def find_exact_directory_match(part: str, subdirs: List[Path]) -> Optional[Path]:
             """Find exact name match in subdirectory list."""
@@ -1516,7 +1542,7 @@ def prompt_for_input(
 
         def find_first_matching_directory(part: str, subdirs: List[Path]) -> Optional[Path]:
             """Find first matching subdirectory using current matching strategy."""
-            matches = apply_matching_strategy(part, subdirs)
+            matches = apply_matching_strategy(part, subdirs, no_fuzzy)
             if matches:
                 return matches[0]
             else:
@@ -1580,7 +1606,7 @@ def prompt_for_input(
             """Get list of validation candidates (directories and .pem files) from directory."""
             try:
                 return [item for item in current_dir.iterdir()
-                       if item.is_dir() or (item.is_file() and item.suffix == '.pem')]
+                       if item.is_dir() or (item.is_file() and item.suffix.lower() == '.pem')]
             except PermissionError:
                 raise_validation_error_with_state("no match", state, PTValidationError)
 
@@ -1596,7 +1622,7 @@ def prompt_for_input(
 
         def validate_query_has_match_or_fail(query: str, candidates: List[Path]) -> None:
             """Validate that query matches at least one candidate, raise error if not."""
-            matches = apply_matching_strategy(query, candidates)
+            matches = apply_matching_strategy(query, candidates, no_fuzzy)
             if not matches:
                 raise_validation_error_with_state("no match", state, PTValidationError)
 
@@ -1777,36 +1803,6 @@ def prompt_for_input(
                 if enable_path_completion and not buf.complete_state:
                     buf.start_completion(select_first=False)
 
-        def check_ordered_chars(query_str: str, target_str: str) -> bool:
-            """Check if query characters appear in order in target (case-insensitive)."""
-            query_lower: str = query_str.lower()
-            target_lower: str = target_str.lower()
-            query_idx: int = 0
-            for char in target_lower:
-                query_idx += (query_idx < len(query_lower) and char == query_lower[query_idx])
-            return query_idx == len(query_lower)
-
-        def match_prefix_case_sensitive(query_str: str, target_str: str) -> bool:
-            """Match using case-sensitive prefix matching."""
-            return target_str.startswith(query_str)
-
-        def match_prefix_case_insensitive(query_str: str, target_str: str) -> bool:
-            """Match using case-insensitive prefix matching."""
-            return target_str.lower().startswith(query_str.lower())
-
-        def select_prefix_matcher(query_str: str) -> Callable[[str, str], bool]:
-            """Select appropriate prefix matcher based on query case."""
-            query_has_upper = any(c.isupper() for c in query_str)
-            return match_prefix_case_sensitive if query_has_upper else match_prefix_case_insensitive
-
-        def match_by_prefix_mode(query_str: str, target_str: str) -> bool:
-            """Match using prefix-only matching with case sensitivity rules."""
-            matcher = select_prefix_matcher(query_str)
-            return matcher(query_str, target_str)
-
-        def match_query_against_target(query_str: str, target_str: str) -> bool:
-            """Match query against target based on current fuzzy mode setting."""
-            return match_by_prefix_mode(query_str, target_str) if no_fuzzy else check_ordered_chars(query_str, target_str)
 
         def collect_directory_candidates(directory: Path) -> List[Path]:
             """Collect directory items from a path, returning empty list if unavailable."""
@@ -1815,7 +1811,7 @@ def prompt_for_input(
         def collect_final_segment_candidates(directory: Path) -> List[Path]:
             """Collect both directories and .pem files from a path."""
             return [item for item in directory.iterdir()
-                   if item.is_dir() or (item.is_file() and item.suffix == '.pem')] if directory.exists() else []
+                   if item.is_dir() or (item.is_file() and item.suffix.lower() == '.pem')] if directory.exists() else []
 
         def collect_candidates_for_segment(directory: Path, is_final_segment: bool) -> List[Path]:
             """Collect candidates based on whether this is the final path segment."""
@@ -1827,7 +1823,7 @@ def prompt_for_input(
 
         def filter_candidates_by_query(candidates: List[Path], query: str) -> List[Path]:
             """Filter candidates to those matching the query."""
-            return [c for c in candidates if match_query_against_target(query, c.name)]
+            return [c for c in candidates if match_query_against_target(query, c.name, no_fuzzy)]
 
         def select_first_candidate(candidates: List[Path]) -> Path:
             """Select the first candidate from a list."""
@@ -2027,7 +2023,7 @@ def prompt_for_input(
 
         def check_path_is_pem_file(path: Path) -> bool:
             """Check if path has .pem extension."""
-            return path.suffix == '.pem'
+            return path.suffix.lower() == '.pem'
 
         def validate_path_exists_or_abort(path: Path) -> bool:
             """Validate path exists, return False and set error if not."""
