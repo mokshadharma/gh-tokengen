@@ -1449,6 +1449,14 @@ def match_query_against_target(query_str: str, target_str: str, no_fuzzy: bool) 
         return has_ordered_characters_match(query_str, target_str)
 
 
+def find_exact_directory_match(subdirs: List[Path], part: str) -> Optional[Path]:
+    """Find exact name match in subdirectory list."""
+    for subdir in subdirs:
+        if subdir.name == part:
+            return subdir
+    return None
+
+
 def prompt_for_input(
     prompt_text: str,
     enable_path_completion: bool = False,
@@ -1533,13 +1541,6 @@ def prompt_for_input(
 
 
 
-        def find_exact_directory_match(part: str, subdirs: List[Path]) -> Optional[Path]:
-            """Find exact name match in subdirectory list."""
-            for subdir in subdirs:
-                if subdir.name == part:
-                    return subdir
-            return None
-
         def find_first_matching_directory(part: str, subdirs: List[Path]) -> Optional[Path]:
             """Find first matching subdirectory using current matching strategy."""
             matches = apply_matching_strategy(part, subdirs, no_fuzzy)
@@ -1550,7 +1551,7 @@ def prompt_for_input(
 
         def resolve_directory_segment(part: str, subdirs: List[Path]) -> Optional[Path]:
             """Resolve a single directory path segment to a matched directory."""
-            exact = find_exact_directory_match(part, subdirs)
+            exact = find_exact_directory_match(subdirs, part)
             if exact:
                 return exact
             else:
