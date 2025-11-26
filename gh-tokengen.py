@@ -15,7 +15,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, NoReturn, Callable, List, Union, Iterator
-from urllib.request import Request, urlopen
+from urllib.request import Request, urlopen, HTTPRedirectHandler, build_opener
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 import base64
@@ -383,18 +383,75 @@ def make_api_request(
         debug_print(f"Making API request to: {url}", debug)
         debug_print(f"Request headers:\n{format_headers_for_display(headers)}", debug)
 
+    # Custom redirect handler that logs requests and responses in debug mode
+    class DebugRedirectHandler(HTTPRedirectHandler):
+        def redirect_request(self, req: Request, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> Optional[Request]:
+            # Log the redirect response
+            if debug:
+                eprint(f"\n[DEBUG] Received redirect response:")
+                eprint(f"[DEBUG]   Status: {code} {msg}")
+                eprint(f"[DEBUG]   Redirect to: {newurl}")
+                eprint(f"[DEBUG] Response headers:")
+                for key, value in headers.items():
+                    eprint(f"[DEBUG]   {key}: {value}")
+                # Read and display the response body if any
+                try:
+                    body = fp.read()
+                    if body:
+                        fp.seek(0)  # Reset for parent class
+                        body_str = body.decode('utf-8', errors='replace')
+                        eprint(f"[DEBUG] Response body:")
+                        eprint(body_str)
+                except Exception:
+                    pass
+
+            # Call parent to get the new request
+            new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+
+            # Log the new request being made
+            if debug and new_req:
+                eprint(f"\n[DEBUG] Following redirect:")
+                eprint(f"[DEBUG]   URL: {new_req.full_url}")
+                eprint(f"[DEBUG]   Method: {new_req.get_method()}")
+                eprint(f"[DEBUG] Request headers:")
+                for key, value in new_req.headers.items():
+                    # Mask authorization header
+                    if key.lower() == 'authorization':
+                        parts = value.split(' ')
+                        if len(parts) == 2:
+                            value = f"{parts[0]} {mask_token(parts[1])}"
+                    eprint(f"[DEBUG]   {key}: {value}")
+
+            return new_req
+
     try:
         request: Request = Request(url, headers=headers, method='POST')
-        with urlopen(request) as response:
+        
+        # Use custom opener with debug redirect handler
+        opener = build_opener(DebugRedirectHandler())
+        
+        with opener.open(request) as response:
             response_headers: Dict[str, str] = dict(response.headers)
-            data: Dict[str, Any] = json.loads(response.read().decode('utf-8'))
-
+            response_body = response.read().decode('utf-8')
+            
+            if debug:
+                eprint(f"\n[DEBUG] Final response:")
+                eprint(f"[DEBUG]   Status: {response.status} {response.reason}")
+                eprint(f"[DEBUG]   URL: {response.url}")
+            
             if show_headers or debug:
                 eprint("\nResponse headers:")
                 for key, value in response_headers.items():
                     eprint(f"  {key}: {value}")
+            
+            if debug:
+                eprint("\nResponse body:")
+                eprint(response_body)
                 eprint()
-
+            elif show_headers:
+                eprint()
+            
+            data: Dict[str, Any] = json.loads(response_body)
             return data, response_headers
 
     except HTTPError as e:
