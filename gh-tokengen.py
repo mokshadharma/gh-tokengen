@@ -1369,6 +1369,12 @@ def raise_validation_error_with_state(message: str, state: ValidationState, vali
     raise validation_error_class(message=message)
 
 
+def expand_home_in_path(text: str) -> Path:
+    """Expand $HOME and ~ in path string."""
+    expanded = text.replace('$HOME', str(Path.home()))
+    return Path(expanded).expanduser()
+
+
 def prompt_for_input(
     prompt_text: str,
     enable_path_completion: bool = False,
@@ -1421,11 +1427,6 @@ def prompt_for_input(
         def check_if_text_empty(text: str) -> bool:
             """Check if text is empty (validation should be skipped)."""
             return not text
-
-        def expand_home_in_path(text: str) -> Path:
-            """Expand $HOME and ~ in path string."""
-            expanded = text.replace('$HOME', str(Path.home()))
-            return Path(expanded).expanduser()
 
         def make_path_absolute_from_cwd(path: Path) -> Path:
             """Make path absolute if relative, using current working directory."""
