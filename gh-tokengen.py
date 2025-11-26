@@ -1331,6 +1331,29 @@ def import_prompt_toolkit_modules() -> Dict[str, Any]:
         raise ImportError(f"Required prompt_toolkit modules not found: {e}")
 
 
+def make_path_absolute_from_cwd(path: Path, cwd: Path) -> Path:
+    """Make path absolute if relative, using current working directory."""
+    return path if path.is_absolute() else cwd / path
+
+
+def determine_base_directory_for_text(text: str, cwd: Path) -> Path:
+    """
+    Determine the base directory based on text prefix.
+
+    Args:
+        text: The input text containing the path
+        cwd: Current working directory to use for relative paths
+
+    Returns:
+        Path object representing the base directory
+    """
+    if text.startswith('/'):
+        return Path('/')
+    elif text.startswith('~/') or text.startswith('$HOME/'):
+        return Path.home()
+    else:
+        return cwd
+
 
 class ValidationState:
     """State container for validation UI feedback."""
@@ -1373,11 +1396,6 @@ def expand_home_in_path(text: str) -> Path:
     """Expand $HOME and ~ in path string."""
     expanded = text.replace('$HOME', str(Path.home()))
     return Path(expanded).expanduser()
-
-
-def make_path_absolute_from_cwd(path: Path, cwd: Path) -> Path:
-    """Make path absolute if relative, using current working directory."""
-    return path if path.is_absolute() else cwd / path
 
 
 def prompt_for_input(
@@ -1457,15 +1475,6 @@ def prompt_for_input(
             validate_path_exists_or_fail(absolute_path)
             validate_path_is_file_or_fail(absolute_path)
             validate_path_is_readable_or_fail(absolute_path)
-
-        def determine_base_directory_for_text(text: str) -> Path:
-            """Determine the base directory based on text prefix."""
-            if text.startswith('/'):
-                return Path('/')
-            elif text.startswith('~/') or text.startswith('$HOME/'):
-                return Path.home()
-            else:
-                return Path(os.getcwd())
 
         def has_ordered_characters_match(query_str: str, target_str: str) -> bool:
             """Check if query characters appear in order in target (case-insensitive)."""
@@ -1640,7 +1649,7 @@ def prompt_for_input(
 
         def perform_path_completion_validation(text: str) -> None:
             """Complete validation workflow for path completion mode."""
-            base_dir = determine_base_directory_for_text(text)
+            base_dir = determine_base_directory_for_text(text, Path(os.getcwd()))
             dispatch_path_validation_by_structure(text, base_dir)
 
         def dispatch_validation_by_completion_mode(expanded_path: Path, text: str) -> None:
