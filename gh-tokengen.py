@@ -383,7 +383,7 @@ def make_api_request(
         debug_print(f"Making API request to: {url}", debug)
         debug_print(f"Request headers:\n{format_headers_for_display(headers)}", debug)
 
-    # Custom redirect handler that logs requests and responses in debug mode
+    # Custom redirect handler that preserves POST method and logs requests/responses in debug mode
     class DebugRedirectHandler(HTTPRedirectHandler):
         def redirect_request(self, req: Request, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> Optional[Request]:
             # Log the redirect response
@@ -405,11 +405,18 @@ def make_api_request(
                 except Exception:
                     pass
 
-            # Call parent to get the new request
-            new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+            # Build the new request preserving the original method (like curl -X POST -L)
+            # This differs from the default HTTPRedirectHandler which converts POST to GET on 301/302/303
+            new_req = Request(
+                newurl,
+                headers=dict(req.headers),
+                origin_req_host=req.origin_req_host,
+                unverifiable=True,
+                method=req.get_method()  # Preserve original method
+            )
 
             # Log the new request being made
-            if debug and new_req:
+            if debug:
                 eprint(f"\n[DEBUG] Following redirect:")
                 eprint(f"[DEBUG]   URL: {new_req.full_url}")
                 eprint(f"[DEBUG]   Method: {new_req.get_method()}")
