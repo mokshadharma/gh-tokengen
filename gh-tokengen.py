@@ -1457,6 +1457,15 @@ def find_exact_directory_match(subdirs: List[Path], part: str) -> Optional[Path]
     return None
 
 
+def find_first_matching_directory(subdirs: List[Path], part: str, no_fuzzy: bool) -> Optional[Path]:
+    """Find first matching subdirectory using current matching strategy."""
+    matches = apply_matching_strategy(part, subdirs, no_fuzzy)
+    if matches:
+        return matches[0]
+    else:
+        return None
+
+
 def prompt_for_input(
     prompt_text: str,
     enable_path_completion: bool = False,
@@ -1541,21 +1550,13 @@ def prompt_for_input(
 
 
 
-        def find_first_matching_directory(part: str, subdirs: List[Path]) -> Optional[Path]:
-            """Find first matching subdirectory using current matching strategy."""
-            matches = apply_matching_strategy(part, subdirs, no_fuzzy)
-            if matches:
-                return matches[0]
-            else:
-                return None
-
         def resolve_directory_segment(part: str, subdirs: List[Path]) -> Optional[Path]:
             """Resolve a single directory path segment to a matched directory."""
             exact = find_exact_directory_match(subdirs, part)
             if exact:
                 return exact
             else:
-                return find_first_matching_directory(part, subdirs)
+                return find_first_matching_directory(subdirs, part, no_fuzzy)
 
         def get_subdirectories_from_path(current_dir: Path) -> List[Path]:
             """Get list of subdirectories from path, empty list if path doesn't exist."""
