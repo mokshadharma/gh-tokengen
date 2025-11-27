@@ -84,6 +84,7 @@ def prompt_for_input(
             Keys,
             SelectionType,
             SelectionState,
+                completer,
         )
         kb = key_binding_handlers.create_key_bindings()
         session_factory = PromptSessionFactory(

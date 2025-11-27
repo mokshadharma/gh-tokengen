@@ -397,6 +397,57 @@ class FuzzyPemCompleter:
         for completion in self.get_completions(document, complete_event):
             yield completion
 
+    def expand_path_if_unique(self, text: str) -> Optional[str]:
+        """
+        Expand path components if they match a single directory.
+        Preserves ~ and $HOME prefixes.
+        Returns the expanded path string or None if no unique expansion or no changes needed.
+        """
+        if not text or not text.endswith('/'):
+            return None
+
+        parts = text.split('/')
+        # parts will end with empty string because of trailing slash
+
+        current_dir = self.base_dir
+        result_parts = []
+
+        start_idx = 0
+        if text.startswith('/'):
+            current_dir = Path('/')
+            result_parts.append('')
+            start_idx = 1
+        elif parts[0] in ('~', '$HOME'):
+            current_dir = Path.home()
+            result_parts.append(parts[0])
+            start_idx = 1
+
+        for i in range(start_idx, len(parts) - 1):
+            part = parts[i]
+            if not part:
+                result_parts.append('')
+                continue
+
+            subdirs = self._get_candidates(current_dir, False)
+            if not subdirs:
+                return None
+
+            matches = self._fuzzy_match(part, subdirs)
+
+            if len(matches) == 1:
+                name, score, path = matches[0]
+                result_parts.append(name)
+                current_dir = path
+            else:
+                return None
+
+        expanded_path = '/'.join(result_parts) + '/'
+
+        if expanded_path == text:
+            return None
+
+        return expanded_path
+
 
 def detect_editing_mode_from_inputrc() -> str:
     """

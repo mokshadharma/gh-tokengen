@@ -133,11 +133,13 @@ class KeyBindingHandlers:
         Keys: Any,
             SelectionType: Any,
             SelectionState: Any,
+            completer: Optional[Any] = None,
     ) -> None:
         self.state = state
         self.enable_path_completion = enable_path_completion
         self.enter_key_validator = enter_key_validator
         self.flash_controller = flash_controller
+        self.completer = completer
         self.KeyBindings = KeyBindings
         self.Keys = Keys
         self.SelectionState = SelectionState
@@ -244,6 +246,13 @@ class KeyBindingHandlers:
                 t.start()
             else:
                 buf.insert_text('/')
+                # Auto-expand if unique directory
+                if self.enable_path_completion and self.completer:
+                    expanded = self.completer.expand_path_if_unique(buf.text)
+                    if expanded:
+                        buf.text = expanded
+                        buf.cursor_position = len(expanded)
+
                 # Trigger completions if path completion is enabled
                 if self.enable_path_completion and not buf.complete_state:
                     buf.start_completion(select_first=False)
