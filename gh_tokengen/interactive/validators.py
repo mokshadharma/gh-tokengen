@@ -5,11 +5,14 @@ from typing import Optional, Callable, List, Tuple, Type, TYPE_CHECKING
 if TYPE_CHECKING:
     from prompt_toolkit.buffer import Buffer
     from prompt_toolkit.document import Document
-try:
+if TYPE_CHECKING:
     from prompt_toolkit.validation import Validator
-except ImportError:
-    class Validator: # type: ignore 
-        pass
+else:
+    try:
+        from prompt_toolkit.validation import Validator
+    except ImportError:
+        class Validator:
+            pass
 
 from gh_tokengen.utils import ValidationError
 from gh_tokengen.interactive.ui import ValidationState, raise_validation_error_with_state

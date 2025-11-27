@@ -1,8 +1,13 @@
 import time
 from pathlib import Path
-from typing import Tuple, Dict, Union
+from typing import Tuple, Dict, Union, TypedDict
 from datetime import datetime, timezone
 from gh_tokengen.utils import debug_print, eprint, fatal_error
+
+class JWTPayload(TypedDict):
+    iat: int
+    exp: int
+    iss: str
 
 def generate_jwt(
     client_id: str,
@@ -48,22 +53,22 @@ def generate_jwt(
 
         # Generate JWT
         now: int = int(time.time())
-        payload: Dict[str, Union[int, str]] = {
+        payload: JWTPayload = {
             'iat': now - 60,  # Issued at (with 60s clock skew tolerance)
             'exp': now + expiry_seconds,  # Expiration
             'iss': client_id  # Issuer (Client ID)
         }
 
-        token: str = pyjwt.encode(payload, private_key, algorithm='RS256')
+        token: str = pyjwt.encode(cast(Dict[str, object], payload), private_key, algorithm='RS256')
 
         if debug:
-            exp_time: datetime = datetime.fromtimestamp(payload['exp'], tz=timezone.utc)  # type: ignore[arg-type]
+            exp_time: datetime = datetime.fromtimestamp(payload['exp'], tz=timezone.utc)
             debug_print("JWT generated successfully", debug)
-            debug_print(f"JWT issued at: {datetime.fromtimestamp(payload['iat'], tz=timezone.utc)}", debug)  # type: ignore[arg-type]
+            debug_print(f"JWT issued at: {datetime.fromtimestamp(payload['iat'], tz=timezone.utc)}", debug)
             debug_print(f"JWT expires at: {exp_time}", debug)
             debug_print(f"JWT preview: {token[:20]}...{token[-20:]}", debug)
 
-        return token, int(payload['iat']), int(payload['exp'])  # type: ignore[arg-type]
+        return token, int(payload['iat']), int(payload['exp'])
 
     except ImportError as e:
         if debug:

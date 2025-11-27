@@ -1,7 +1,7 @@
 from __future__ import annotations
 import threading
 import time
-from typing import Optional, Callable, Dict, Any, NoReturn, TYPE_CHECKING, cast
+from typing import Optional, Callable, Dict, TypedDict, NoReturn, TYPE_CHECKING, cast
 from gh_tokengen.utils import eprint, fatal_error
 from gh_tokengen.interactive.ui import ValidationState, ErrorFlashController
 from gh_tokengen.interactive.validators import EnterKeyValidator
@@ -22,6 +22,23 @@ if TYPE_CHECKING:
     from prompt_toolkit.keys import Keys
     from prompt_toolkit.selection import SelectionType, SelectionState
 
+    from prompt_toolkit.validation import ValidationError
+    from typing import TypedDict
+
+    class PromptToolkitModules(TypedDict):
+        PromptSession: type[PromptSession[str]]
+        EditingMode: type[EditingMode]
+        create_output: Callable[..., Output]
+        Validator: type[Validator]
+        PTValidationError: type[ValidationError]
+        HTML: type[HTML]
+        KeyBindings: type[KeyBindings]
+        Keys: type[Keys]
+        SelectionType: type[SelectionType]
+        SelectionState: type[SelectionState]
+
+else:
+    PromptToolkitModules = Dict[str, object]
 
 def select_validator_for_mode(enable_path_completion: bool, validator: Validator) -> Optional[Validator]:
     """Select validator based on path completion mode."""
@@ -97,7 +114,7 @@ def handle_interrupt_error() -> NoReturn:
     fatal_error("Input cancelled by user")
 
 
-def import_prompt_toolkit_modules() -> Dict[str, Any]:
+def import_prompt_toolkit_modules() -> PromptToolkitModules:
     """
     Import prompt_toolkit modules and return them in a dictionary.
 

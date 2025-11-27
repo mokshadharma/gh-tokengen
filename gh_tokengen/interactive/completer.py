@@ -5,10 +5,14 @@ from pathlib import Path
 from typing import List, Tuple, Union, Optional, Iterator, Dict, TYPE_CHECKING, cast, AsyncGenerator
 from gh_tokengen.utils import natural_sort_key
 
-try:
+if TYPE_CHECKING:
     from prompt_toolkit.completion import Completer
-except ImportError:
-    Completer = object # type: ignore
+else:
+    try:
+        from prompt_toolkit.completion import Completer
+    except ImportError:
+        class Completer:
+            pass
 
 if TYPE_CHECKING:
     from prompt_toolkit.completion import Completion
