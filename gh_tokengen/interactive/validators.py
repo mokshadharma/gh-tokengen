@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
-from typing import Any, Optional, Callable, List, Tuple, Type, TYPE_CHECKING
+from typing import Optional, Callable, List, Tuple, Type, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from prompt_toolkit.buffer import Buffer

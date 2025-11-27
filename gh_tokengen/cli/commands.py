@@ -1,6 +1,6 @@
 import sys
 import argparse
-from typing import Optional, Dict, Any
+from typing import Optional, Dict
 from pathlib import Path
 from gh_tokengen.utils import eprint, debug_print
 from gh_tokengen.output import (

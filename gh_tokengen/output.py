@@ -1,5 +1,5 @@
 import json
-from typing import Dict, List, Any, TypedDict, Optional, NotRequired
+from typing import Dict, List, TypedDict, Optional, NotRequired
 from datetime import datetime, timezone, timedelta
 from gh_tokengen.utils import debug_print
 

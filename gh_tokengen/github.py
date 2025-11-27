@@ -1,6 +1,6 @@
 import sys
 from pathlib import Path
-from typing import Dict, Any, cast
+from typing import Dict, cast
 from gh_tokengen.utils import eprint
 from gh_tokengen.output import format_headers_for_display, TokenData
 from gh_tokengen.jwt_gen import generate_jwt
@@ -60,7 +60,7 @@ def get_installation_token(
         sys.exit(0)
 
     # Exchange JWT for installation token
-    data: Dict[str, Any]
+    data: Dict[str, object]
     response_headers: Dict[str, str]
     data, response_headers = make_api_request(
         endpoint,

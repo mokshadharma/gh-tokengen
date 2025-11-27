@@ -2,7 +2,7 @@ from __future__ import annotations
 import re
 from types import ModuleType
 from pathlib import Path
-from typing import List, Tuple, Union, Optional, Any, Iterator, Dict, TYPE_CHECKING, cast, AsyncGenerator
+from typing import List, Tuple, Union, Optional, Iterator, Dict, TYPE_CHECKING, cast, AsyncGenerator
 from gh_tokengen.utils import natural_sort_key
 
 try:

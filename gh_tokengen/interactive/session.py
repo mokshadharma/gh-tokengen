@@ -1,7 +1,7 @@
 from __future__ import annotations
 import threading
 import time
-from typing import Any, Optional, Callable, Dict, NoReturn, TYPE_CHECKING, cast
+from typing import Optional, Callable, Dict, Any, NoReturn, TYPE_CHECKING, cast
 from gh_tokengen.utils import eprint, fatal_error
 from gh_tokengen.interactive.ui import ValidationState, ErrorFlashController
 from gh_tokengen.interactive.validators import EnterKeyValidator
@@ -10,6 +10,7 @@ from prompt_toolkit.completion import CompleteEvent
 from gh_tokengen.interactive.completer import FuzzyPemCompleter
 
 if TYPE_CHECKING:
+    from prompt_toolkit.formatted_text import HTML
     from prompt_toolkit.buffer import Buffer
     from prompt_toolkit.key_binding import KeyPressEvent
     from prompt_toolkit.shortcuts import PromptSession
@@ -30,7 +31,7 @@ def select_validator_for_mode(enable_path_completion: bool, validator: Validator
         return None
 
 
-def select_toolbar_for_modes(enable_path_completion: bool, no_path_completion: bool, validator_func: Optional[Callable[[str], None]], bottom_toolbar: Callable[[], Any]) -> Optional[Callable[[], Any]]:
+def select_toolbar_for_modes(enable_path_completion: bool, no_path_completion: bool, validator_func: Optional[Callable[[str], None]], bottom_toolbar: Callable[[], HTML]) -> Optional[Callable[[], HTML]]:
     """Select toolbar function based on validation modes."""
     if enable_path_completion or no_path_completion or validator_func:
         return bottom_toolbar
@@ -305,7 +306,7 @@ class PromptSessionFactory:
         output: Output,
         validator: Validator,
         key_bindings: KeyBindings,
-        bottom_toolbar: Callable[[], Any]
+        bottom_toolbar: Callable[[], HTML]
     ) -> None:
         self.prompt_text = prompt_text
         self.enable_path_completion = enable_path_completion

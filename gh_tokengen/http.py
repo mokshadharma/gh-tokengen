@@ -3,7 +3,7 @@ import tempfile
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, Any, Tuple, List
+from typing import Dict, cast, Tuple, List
 from gh_tokengen.utils import debug_print, eprint, fatal_error
 from gh_tokengen.output import format_headers_for_display
 
@@ -15,7 +15,7 @@ def make_api_request(
     user_agent: str,
     debug: bool,
     show_headers: bool
-) -> Tuple[Dict[str, Any], Dict[str, str]]:
+) -> Tuple[Dict[str, object], Dict[str, str]]:
     """
     Make an API request to GitHub using curl.
 
@@ -87,7 +87,7 @@ url = {url}
             )
 
             # Parse curl's JSON metadata output
-            curl_metadata: Dict[str, Any] = {}
+            curl_metadata: Dict[str, object] = {}
             if result.stdout:
                 try:
                     curl_metadata = json.loads(result.stdout)
@@ -127,9 +127,9 @@ url = {url}
                             response_headers[key.strip()] = value.strip()
 
             # Extract status code and other info from curl metadata
-            http_code: int = curl_metadata.get('http_code', 0)
-            effective_url: str = curl_metadata.get('url_effective', url)
-            num_redirects: int = curl_metadata.get('num_redirects', 0)
+            http_code: int = cast(int, curl_metadata.get('http_code', 0))
+            effective_url: str = cast(str, curl_metadata.get('url_effective', url))
+            num_redirects: int = cast(int, curl_metadata.get('num_redirects', 0))
 
             # Debug output for redirects
             if debug and num_redirects > 0:
@@ -157,7 +157,7 @@ url = {url}
                     eprint("\nResponse body:")
                     # Try to pretty-print JSON, otherwise display verbatim
                     try:
-                        error_data: Dict[str, Any] = json.loads(response_body)
+                        error_data: Dict[str, object] = json.loads(response_body)
                         eprint(json.dumps(error_data, indent=2))
                     except (json.JSONDecodeError, ValueError):
                         # Not JSON, display verbatim
@@ -182,7 +182,7 @@ url = {url}
             elif show_headers:
                 eprint()
 
-            data: Dict[str, Any] = json.loads(response_body)
+            data: Dict[str, object] = json.loads(response_body)
             return data, response_headers
 
         except FileNotFoundError:
