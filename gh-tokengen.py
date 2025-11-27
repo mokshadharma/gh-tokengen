@@ -2005,6 +2005,68 @@ class EnterKeyValidator:
             self.validator_func
         )
 
+class ErrorFlashController:
+    """Controls error flash animation in the toolbar."""
+
+    def __init__(self, state: ValidationState, enable_path_completion: bool) -> None:
+        """
+        Initialize the controller.
+
+        Args:
+            state: Validation state for flash state
+            enable_path_completion: Whether path completion is enabled
+        """
+        self.state = state
+        self.enable_path_completion = enable_path_completion
+
+    def should_flash(self, buf: Any) -> bool:
+        """Check if error should be flashed."""
+        return bool(self.enable_path_completion and self.state.error_message and not buf.complete_state)
+
+    def _enable_flash_error_state(self) -> None:
+        """Enable flash error state."""
+        self.state.flash_error = True
+
+    def _create_unflash_callback(self, event: Any) -> Callable[[], None]:
+        """Create callback to unflash error after delay."""
+        def unflash() -> None:
+            time.sleep(0.5)
+            self.state.flash_error = False
+            event.app.invalidate()
+        return unflash
+
+    def _check_if_flash_thread_is_inactive(self) -> bool:
+        """Check if flash thread is None or not alive."""
+        return self.state.flash_thread is None or not self.state.flash_thread.is_alive()
+
+    def _start_unflash_thread(self, unflash_callback: Callable[[], None]) -> None:
+        """Start unflash thread with callback."""
+        self.state.flash_thread = threading.Thread(target=unflash_callback, daemon=True)
+        if self.state.flash_thread:
+            self.state.flash_thread.start()
+
+    def _start_unflash_thread_if_inactive(self, event: Any) -> None:
+        """Start unflash thread if no active thread exists."""
+        if self._check_if_flash_thread_is_inactive():
+            unflash_callback = self._create_unflash_callback(event)
+            self._start_unflash_thread(unflash_callback)
+
+    def flash(self, event: Any) -> None:
+        """Perform error flash animation."""
+        self._enable_flash_error_state()
+        self._start_unflash_thread_if_inactive(event)
+
+    def _perform_normal_tab_completion(self, buf: Any) -> None:
+        """Perform normal tab completion."""
+        buf.complete_next()
+
+    def handle_tab(self, buf: Any, event: Any) -> None:
+        """Handle tab key based on current state."""
+        if self.should_flash(buf):
+            self.flash(event)
+        else:
+            self._perform_normal_tab_completion(buf)
+
 def prompt_for_input(
     prompt_text: str,
     enable_path_completion: bool = False,
