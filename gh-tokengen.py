@@ -1467,7 +1467,7 @@ def find_first_matching_directory(subdirs: List[Path], part: str, no_fuzzy: bool
 
 
 def resolve_directory_segment(subdirs: List[Path], part: str, no_fuzzy: bool) -> Optional[Path]:
-    """Resolve a single directory path segment to a matched directory."""
+    """Resolve a path segment to a matched directory."""
     exact = find_exact_directory_match(subdirs, part)
     if exact:
         return exact
@@ -1490,6 +1490,12 @@ def check_skip_directory_part(i: int, part: str) -> bool:
     if i == 0 and part in ('~', '$HOME'):
         return True
     return False
+
+
+def navigate_one_directory_segment(current_path: Path, part: str, no_fuzzy: bool) -> Optional[Path]:
+    """Navigate through one directory segment."""
+    subdirs = get_subdirectories_from_path(current_path)
+    return resolve_directory_segment(subdirs, part, no_fuzzy)
 
 
 def prompt_for_input(
@@ -1580,14 +1586,13 @@ def prompt_for_input(
             if not matched and final_query:
                 raise_validation_error_with_state("no match", state, PTValidationError)
 
-        def navigate_one_directory_segment(i: int, part: str, current_dir: Path, final_query: str) -> Path:
+        def navigate_segment_with_validation(i: int, part: str, current_dir: Path, final_query: str) -> Path:
             """Navigate through one directory segment, returning updated current directory."""
             if check_skip_directory_part(i, part):
                 return current_dir
 
             validate_directory_exists_for_query_or_fail(current_dir, final_query)
-            subdirs = get_subdirectories_from_path(current_dir)
-            matched = resolve_directory_segment(subdirs, part, no_fuzzy)
+            matched = navigate_one_directory_segment(current_dir, part, no_fuzzy)
             validate_match_found_for_query_or_fail(matched, final_query)
             if matched:
                 return matched
@@ -1598,7 +1603,7 @@ def prompt_for_input(
             """Navigate through all directory parts, returning final directory."""
             current_dir = base_dir
             for i, part in enumerate(dir_parts):
-                current_dir = navigate_one_directory_segment(i, part, current_dir, final_query)
+                current_dir = navigate_segment_with_validation(i, part, current_dir, final_query)
             return current_dir
 
         def get_path_validation_candidates_or_fail(current_dir: Path) -> List[Path]:
@@ -1898,6 +1903,8 @@ def prompt_for_input(
             for i in range(start_idx, len(parts)):
                 part = parts[i]
 
+
+
                 if skip_empty_or_special_part(part):
                     continue
 
@@ -1906,6 +1913,7 @@ def prompt_for_input(
                 matched = resolve_segment_match(candidates, part)
 
                 if not matched:
+
                     return None
 
                 current_dir = matched
