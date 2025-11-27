@@ -1,10 +1,14 @@
+from __future__ import annotations
 import threading
 import time
-from typing import Any, Optional, Callable, Dict, NoReturn
+from typing import Any, Optional, Callable, Dict, NoReturn, TYPE_CHECKING, cast
 from gh_tokengen.utils import eprint, fatal_error
 from gh_tokengen.interactive.ui import ValidationState, ErrorFlashController
 from gh_tokengen.interactive.validators import EnterKeyValidator
 from gh_tokengen.interactive.completer import detect_editing_mode_from_inputrc, select_editing_mode_by_string
+
+if TYPE_CHECKING:
+    from prompt_toolkit.key_binding import KeyPressEvent
 
 
 def select_validator_for_mode(enable_path_completion: bool, validator: Any) -> Optional[Any]:
@@ -148,7 +152,7 @@ class KeyBindingHandlers:
         kb = self.KeyBindings()
 
         @kb.add(self.Keys.Backspace)
-        def handle_backspace(event: Any) -> None:
+        def handle_backspace(event: KeyPressEvent) -> None:
             """Handle backspace - keep completions visible."""
             buf = event.app.current_buffer
             if buf.cursor_position > 0:
@@ -158,7 +162,7 @@ class KeyBindingHandlers:
                     buf.start_completion(select_first=False)
 
         @kb.add(self.Keys.ControlW)
-        def handle_ctrl_w(event: Any) -> None:
+        def handle_ctrl_w(event: KeyPressEvent) -> None:
             """Handle Ctrl-W (delete word) - keep completions visible and save to yank buffer."""
             buf = event.app.current_buffer
             # Delete word before cursor (standard behavior)
@@ -192,7 +196,7 @@ class KeyBindingHandlers:
                     buf.start_completion(select_first=False)
 
         @kb.add(self.Keys.ControlU)
-        def handle_ctrl_u(event: Any) -> None:
+        def handle_ctrl_u(event: KeyPressEvent) -> None:
             """Handle Ctrl-U (delete from beginning of line to cursor) - save to yank buffer."""
             buf = event.app.current_buffer
             if buf.cursor_position > 0:
@@ -210,7 +214,7 @@ class KeyBindingHandlers:
                     buf.start_completion(select_first=False)
 
         @kb.add(self.Keys.ControlY)
-        def handle_ctrl_y(event: Any) -> None:
+        def handle_ctrl_y(event: KeyPressEvent) -> None:
             """Handle Ctrl-Y (yank/paste) - paste back last deleted text."""
             buf = event.app.current_buffer
             if self.state.yank_buffer:
@@ -224,7 +228,7 @@ class KeyBindingHandlers:
                     buf.start_completion(select_first=False)
 
         @kb.add('/')
-        def handle_slash(event: Any) -> None:
+        def handle_slash(event: KeyPressEvent) -> None:
             """Handle forward slash - prevent double slashes."""
             buf = event.app.current_buffer
             if buf.cursor_position > 0 and buf.text[buf.cursor_position - 1] == '/':
@@ -256,14 +260,14 @@ class KeyBindingHandlers:
                     buf.start_completion(select_first=False)
 
         @kb.add(self.Keys.ControlM)  # Enter key
-        def handle_enter(event: Any) -> None:
+        def handle_enter(event: KeyPressEvent) -> None:
             """Handle Enter key - validate before accepting."""
             buf = event.app.current_buffer
             text = buf.text.strip()
             self.enter_key_validator.validate_and_accept(buf, text)
 
         @kb.add(self.Keys.ControlI)  # Tab key
-        def handle_tab(event: Any) -> None:
+        def handle_tab(event: KeyPressEvent) -> None:
             """Handle Tab key - show completions or flash error."""
             buf = event.app.current_buffer
             self.flash_controller.handle_tab(buf, event)

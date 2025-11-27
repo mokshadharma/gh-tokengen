@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import List, Optional, Tuple, Callable, Any
+from rapidfuzz import fuzz, process
 
 def make_path_absolute_from_cwd(path: Path, cwd: Path) -> Path:
     """Make path absolute if relative, using current working directory."""
@@ -169,13 +170,6 @@ class FuzzyPathResolver:
         self.cwd = cwd
         self.no_fuzzy = no_fuzzy
         self.enable_path_completion = enable_path_completion
-        try:
-            from rapidfuzz import fuzz, process
-            self.fuzz: Any = fuzz
-            self.process: Any = process
-        except ImportError:
-            self.fuzz = None
-            self.process = None
 
     def _collect_directory_candidates(self, directory: Path) -> List[Path]:
         """Collect directory items from a path, returning empty list if unavailable."""
@@ -204,10 +198,8 @@ class FuzzyPathResolver:
 
     def _score_and_select_best_fuzzy_match(self, candidates: List[Path], query: str) -> Optional[Path]:
         """Score candidates and return the best fuzzy match."""
-        if not self.process or not self.fuzz:
-            return None
         names: List[str] = [c.name for c in candidates]
-        matches: List[Tuple[str, float, int]] = self.process.extract(query, names, scorer=self.fuzz.QRatio, limit=1)
+        matches: List[Tuple[str, float, int]] = process.extract(query, names, scorer=fuzz.QRatio, limit=1)
         return next((c for c in candidates if c.name == matches[0][0]), None) if matches else None
 
     def _select_best_fuzzy_candidate(self, candidates: List[Path], query: str) -> Path:

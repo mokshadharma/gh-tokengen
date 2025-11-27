@@ -8,7 +8,8 @@ from gh_tokengen.output import (
     output_jwt,
     output_token,
     format_expiration,
-    format_permissions
+    format_permissions,
+    TokenData
 )
 from gh_tokengen.jwt_gen import generate_jwt
 from gh_tokengen.github import get_installation_token
@@ -73,7 +74,7 @@ def generate_and_output_installation_token(args: argparse.Namespace, client_id: 
     output_installation_token(args, token_data)
 
 
-def show_token_success_info(args: argparse.Namespace, token_data: Dict[str, Any]) -> None:
+def show_token_success_info(args: argparse.Namespace, token_data: TokenData) -> None:
     """Show success information after obtaining token."""
     if args.debug:
         debug_print("Successfully obtained installation token!", args.debug)
@@ -97,7 +98,7 @@ def show_token_success_info(args: argparse.Namespace, token_data: Dict[str, Any]
         eprint("Successfully obtained installation token!\n")
 
 
-def output_installation_token(args: argparse.Namespace, token_data: Dict[str, Any]) -> None:
+def output_installation_token(args: argparse.Namespace, token_data: TokenData) -> None:
     """Output the installation token in the requested format."""
     if args.quiet:
         output_token(token_data, args.output_format, True, args.timestamp_format)

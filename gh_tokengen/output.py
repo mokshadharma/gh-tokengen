@@ -1,7 +1,20 @@
 import json
-from typing import Dict, List, Any
+from typing import Dict, List, Any, TypedDict, Optional, NotRequired
 from datetime import datetime, timezone, timedelta
 from gh_tokengen.utils import debug_print
+
+class TokenData(TypedDict):
+    token: str
+    expires_at: str
+    permissions: Dict[str, str]
+    repository_selection: str
+
+class OutputData(TypedDict):
+    token: str
+    expires_at: str
+    permissions: Dict[str, str]
+    repository_selection: str
+    expires_in_seconds: NotRequired[int]
 
 def mask_token(token: str) -> str:
     """Mask a token for safe display, showing only first and last few characters."""
@@ -105,7 +118,7 @@ def output_jwt(
 
 
 def output_token(
-    token_data: Dict[str, Any],
+    token_data: TokenData,
     output_format: str,
     quiet: bool,
     timestamp_format: str
@@ -122,7 +135,7 @@ def output_token(
     token: str = token_data.get('token', '')
 
     if output_format == 'json':
-        output: Dict[str, Any] = {
+        output: OutputData = {
             'token': token,
             'expires_at': token_data.get('expires_at', ''),
             'permissions': token_data.get('permissions', {}),

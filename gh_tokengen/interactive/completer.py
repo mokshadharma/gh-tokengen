@@ -1,7 +1,12 @@
+from __future__ import annotations
 import re
 from pathlib import Path
-from typing import List, Tuple, Union, Optional, Any, Iterator, Dict
+from typing import List, Tuple, Union, Optional, Any, Iterator, Dict, TYPE_CHECKING, cast
 from gh_tokengen.utils import natural_sort_key
+
+if TYPE_CHECKING:
+    from prompt_toolkit.document import Document
+    from prompt_toolkit.completion import CompleteEvent
 
 class FuzzyPemCompleter:
     """
@@ -366,7 +371,7 @@ class FuzzyPemCompleter:
         else:
             yield from self._handle_non_slash_path_completions(text, Completion)
 
-    def get_completions(self, document: Any, complete_event: Any) -> Iterator[Any]:
+    def get_completions(self, document: Document, complete_event: CompleteEvent) -> Iterator[Any]:
         """
         Generate completions for the current document state.
 
@@ -382,7 +387,7 @@ class FuzzyPemCompleter:
         text: str = document.text_before_cursor
         yield from self._dispatch_completions_by_path_type(text, Completion)
 
-    async def get_completions_async(self, document: Any, complete_event: Any) -> Any:
+    async def get_completions_async(self, document: Document, complete_event: CompleteEvent) -> Any:
         """
         Async version of get_completions required by prompt_toolkit.
 

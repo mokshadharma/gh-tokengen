@@ -1,8 +1,8 @@
 import sys
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, cast
 from gh_tokengen.utils import eprint
-from gh_tokengen.output import format_headers_for_display
+from gh_tokengen.output import format_headers_for_display, TokenData
 from gh_tokengen.jwt_gen import generate_jwt
 from gh_tokengen.http import make_api_request
 
@@ -17,7 +17,7 @@ def get_installation_token(
     debug: bool,
     show_headers: bool,
     dry_run: bool
-) -> Dict[str, Any]:
+) -> TokenData:
     """
     Get an installation token from GitHub API.
 
@@ -60,15 +60,16 @@ def get_installation_token(
         sys.exit(0)
 
     # Exchange JWT for installation token
-    token_data: Dict[str, Any]
+    data: Dict[str, Any]
     response_headers: Dict[str, str]
-    token_data, response_headers = make_api_request(
+    data, response_headers = make_api_request(
         endpoint,
         jwt_token,
         user_agent,
         debug,
         show_headers
     )
+    token_data = cast(TokenData, data)
 
     return token_data
 

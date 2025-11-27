@@ -1,14 +1,21 @@
+from __future__ import annotations
 import threading
 import time
-from typing import Optional, Callable, Any, NoReturn
+from typing import Optional, Callable, Any, NoReturn, TYPE_CHECKING, cast
 
-def create_toolbar_display(flash_error: bool, error_message: str, HTML: Any) -> Any:
+if TYPE_CHECKING:
+    from prompt_toolkit.formatted_text import HTML
+    from prompt_toolkit.buffer import Buffer
+    from prompt_toolkit.key_binding import KeyPressEvent
+
+
+def create_toolbar_display(flash_error: bool, error_message: str, html_class: type[HTML]) -> HTML:
     """Create toolbar display based on error state."""
     if flash_error:
-        return HTML('<style bg="ansired" fg="ansiblack">  {}  </style>').format(error_message)
+        return html_class('<style bg="ansired" fg="ansiblack">  {}  </style>').format(error_message)
     elif error_message:
-        return HTML('<style fg="ansired">  {}  </style>').format(error_message)
-    return ""
+        return html_class('<style fg="ansired">  {}  </style>').format(error_message)
+    return html_class("")
 class ValidationState:
     """State container for validation UI feedback."""
 
@@ -24,7 +31,7 @@ def create_validation_state() -> ValidationState:
     return ValidationState()
 
 
-def create_bottom_toolbar_func(state: ValidationState, HTML: Any) -> Callable[[], Any]:
+def create_bottom_toolbar_func(state: ValidationState, html_class: type[HTML]) -> Callable[[], HTML]:
     """
     Create bottom toolbar function that captures state.
 
@@ -35,8 +42,8 @@ def create_bottom_toolbar_func(state: ValidationState, HTML: Any) -> Callable[[]
     Returns:
         A function that returns the toolbar content
     """
-    def bottom_toolbar() -> Any:
-        return create_toolbar_display(state.flash_error, state.error_message, HTML)
+    def bottom_toolbar() -> HTML:
+        return create_toolbar_display(state.flash_error, state.error_message, html_class)
     return bottom_toolbar
 
 
@@ -58,7 +65,7 @@ class ErrorFlashController:
         self.state = state
         self.enable_path_completion = enable_path_completion
 
-    def should_flash(self, buf: Any) -> bool:
+    def should_flash(self, buf: Buffer) -> bool:
         """Check if error should be flashed."""
         return bool(self.enable_path_completion and self.state.error_message and not buf.complete_state)
 
@@ -66,7 +73,7 @@ class ErrorFlashController:
         """Enable flash error state."""
         self.state.flash_error = True
 
-    def _create_unflash_callback(self, event: Any) -> Callable[[], None]:
+    def _create_unflash_callback(self, event: KeyPressEvent) -> Callable[[], None]:
         """Create callback to unflash error after delay."""
         def unflash() -> None:
             time.sleep(0.5)
@@ -84,22 +91,22 @@ class ErrorFlashController:
         if self.state.flash_thread:
             self.state.flash_thread.start()
 
-    def _start_unflash_thread_if_inactive(self, event: Any) -> None:
+    def _start_unflash_thread_if_inactive(self, event: KeyPressEvent) -> None:
         """Start unflash thread if no active thread exists."""
         if self._check_if_flash_thread_is_inactive():
             unflash_callback = self._create_unflash_callback(event)
             self._start_unflash_thread(unflash_callback)
 
-    def flash(self, event: Any) -> None:
+    def flash(self, event: KeyPressEvent) -> None:
         """Perform error flash animation."""
         self._enable_flash_error_state()
         self._start_unflash_thread_if_inactive(event)
 
-    def _perform_normal_tab_completion(self, buf: Any) -> None:
+    def _perform_normal_tab_completion(self, buf: Buffer) -> None:
         """Perform normal tab completion."""
         buf.complete_next()
 
-    def handle_tab(self, buf: Any, event: Any) -> None:
+    def handle_tab(self, buf: Buffer, event: KeyPressEvent) -> None:
         """Handle tab key based on current state."""
         if self.should_flash(buf):
             self.flash(event)
