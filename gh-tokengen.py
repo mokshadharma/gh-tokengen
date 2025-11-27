@@ -1601,59 +1601,14 @@ def prompt_for_input(
             validate_path_is_file_or_fail(absolute_path)
             validate_path_is_readable_or_fail(absolute_path)
 
-        def validate_directory_exists_for_query_or_fail(current_dir: Path, final_query: str) -> None:
-            """Validate directory exists when there's a final query to match."""
-            if not current_dir.exists() and final_query:
-                raise_validation_error_with_state("no match", state, PTValidationError)
 
-        def validate_match_found_for_query_or_fail(matched: Optional[Path], final_query: str) -> None:
-            """Validate that a match was found when there's a final query."""
-            if not matched and final_query:
-                raise_validation_error_with_state("no match", state, PTValidationError)
 
-        def navigate_segment_with_validation(i: int, part: str, current_dir: Path, final_query: str) -> Path:
-            """Navigate through one directory segment, returning updated current directory."""
-            if check_skip_directory_part(i, part):
-                return current_dir
 
-            validate_directory_exists_for_query_or_fail(current_dir, final_query)
-            matched = navigate_one_directory_segment(current_dir, part, no_fuzzy)
-            validate_match_found_for_query_or_fail(matched, final_query)
-            if matched:
-                return matched
-            else:
-                return current_dir
 
-        def get_path_validation_candidates_or_fail(current_dir: Path) -> List[Path]:
-            """Get list of validation candidates (directories and .pem files) from directory."""
-            try:
-                return [item for item in current_dir.iterdir()
-                       if item.is_dir() or (item.is_file() and item.suffix.lower() == '.pem')]
-            except PermissionError:
-                raise_validation_error_with_state("no match", state, PTValidationError)
 
-        def validate_directory_exists_or_fail(current_dir: Path) -> None:
-            """Validate directory exists, raise 'no match' error if not."""
-            if not current_dir.exists():
-                raise_validation_error_with_state("no match", state, PTValidationError)
 
-        def validate_candidates_not_empty_or_fail(candidates: List[Path]) -> None:
-            """Validate that candidates list is not empty, raise error if empty."""
-            if not candidates:
-                raise_validation_error_with_state("no match", state, PTValidationError)
 
-        def validate_query_has_match_or_fail(query: str, candidates: List[Path]) -> None:
-            """Validate that query matches at least one candidate, raise error if not."""
-            matches = apply_matching_strategy(query, candidates, no_fuzzy)
-            if not matches:
-                raise_validation_error_with_state("no match", state, PTValidationError)
 
-        def validate_final_query_segment(final_query: str, current_dir: Path) -> None:
-            """Validate final query segment against candidates in directory."""
-            validate_directory_exists_or_fail(current_dir)
-            candidates = get_path_validation_candidates_or_fail(current_dir)
-            validate_candidates_not_empty_or_fail(candidates)
-            validate_query_has_match_or_fail(final_query, candidates)
 
         def parse_path_components(text: str) -> Tuple[List[str], str]:
             """Parse path into directory parts and final query segment."""
@@ -1663,7 +1618,7 @@ def prompt_for_input(
         def validate_final_query_if_present(final_query: str, current_dir: Path) -> None:
             """Validate final query segment if it's not empty."""
             if final_query:
-                validate_final_query_segment(final_query, current_dir)
+                validate_final_query_segment(final_query, current_dir, no_fuzzy, state, PTValidationError)
 
         def validate_multi_segment_path(text: str, base_dir: Path) -> None:
             """Validate a path containing directory separators."""
@@ -1679,10 +1634,10 @@ def prompt_for_input(
 
         def validate_non_special_single_segment(text: str, base_dir: Path) -> None:
             """Validate single segment path that is not a special marker."""
-            validate_directory_exists_or_fail(base_dir)
-            candidates = get_path_validation_candidates_or_fail(base_dir)
-            validate_candidates_not_empty_or_fail(candidates)
-            validate_query_has_match_or_fail(text, candidates)
+            validate_directory_exists_or_fail(base_dir, state, PTValidationError)
+            candidates = get_path_validation_candidates_or_fail(base_dir, state, PTValidationError)
+            validate_candidates_not_empty_or_fail(candidates, state, PTValidationError)
+            validate_query_has_match_or_fail(text, candidates, no_fuzzy, state, PTValidationError)
 
         def validate_single_segment_path(text: str, base_dir: Path) -> None:
             """Validate a simple path with no directory separators."""
@@ -1913,7 +1868,6 @@ def prompt_for_input(
             """Build the final result tuple with unexpanded and expanded paths."""
             unexpanded = '/'.join(unexpanded_parts)
             return (unexpanded, str(resolved_path))
-
 
 
         def navigate_through_path_segments(parts: List[str], start_idx: int, initial_dir: Path, unexpanded_parts: List[str]) -> Optional[Tuple[Path, List[str]]]:
@@ -2164,7 +2118,8 @@ def prompt_for_input(
         def start_unflash_thread(unflash_callback: Callable[[], None]) -> None:
             """Start unflash thread with callback."""
             state.flash_thread = threading.Thread(target=unflash_callback, daemon=True)
-            state.flash_thread.start()
+            if state.flash_thread:
+                state.flash_thread.start()
 
         def start_unflash_thread_if_inactive(event: Any) -> None:
             """Start unflash thread if no active thread exists."""
@@ -2197,7 +2152,7 @@ def prompt_for_input(
         selected_validator = select_validator_for_mode(enable_path_completion, validator)
         selected_toolbar = select_toolbar_for_modes(enable_path_completion, no_path_completion, validator_func, bottom_toolbar)
 
-        session: PromptSession[str] = PromptSession(
+        session = PromptSession(
             message=prompt_text,
             editing_mode=editing_mode,
             completer=completer,
