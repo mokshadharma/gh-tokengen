@@ -1,4 +1,3 @@
-import sys
 from gh_tokengen.cli.args import parse_arguments, validate_command_line_args
 from gh_tokengen.cli.inputs import collect_inputs
 from gh_tokengen.cli.commands import generate_token, show_progress_and_debug_info

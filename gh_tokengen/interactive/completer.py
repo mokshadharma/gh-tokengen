@@ -1,6 +1,6 @@
 import re
 from pathlib import Path
-from typing import List, Tuple, Union, Optional, Any, Iterator, Dict, Callable
+from typing import List, Tuple, Union, Optional, Any, Iterator, Dict
 from gh_tokengen.utils import natural_sort_key
 
 class FuzzyPemCompleter:

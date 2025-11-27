@@ -1,10 +1,8 @@
 import threading
 import time
-import sys
-from pathlib import Path
 from typing import Any, Optional, Callable, Dict
 from gh_tokengen.utils import eprint, fatal_error
-from gh_tokengen.interactive.ui import ValidationState, ErrorFlashController, create_toolbar_display
+from gh_tokengen.interactive.ui import ValidationState, ErrorFlashController
 from gh_tokengen.interactive.validators import EnterKeyValidator
 from gh_tokengen.interactive.completer import detect_editing_mode_from_inputrc, select_editing_mode_by_string
 

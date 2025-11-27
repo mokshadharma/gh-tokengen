@@ -1,6 +1,5 @@
 from pathlib import Path
 from typing import List, Optional, Tuple, Callable, Any
-from gh_tokengen.utils import natural_sort_key
 
 def make_path_absolute_from_cwd(path: Path, cwd: Path) -> Path:
     """Make path absolute if relative, using current working directory."""

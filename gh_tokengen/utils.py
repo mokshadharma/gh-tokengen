@@ -48,6 +48,5 @@ def natural_sort_key(s: str) -> List[Union[int, str]]:
     Returns:
         List of alternating strings and integers for proper sorting
     """
-    import re
     return [int(text) if text.isdigit() else text.lower()
             for text in re.split(r'(\d+)', s)]
