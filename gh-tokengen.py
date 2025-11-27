@@ -1498,6 +1498,31 @@ def navigate_one_directory_segment(current_path: Path, part: str, no_fuzzy: bool
     return resolve_directory_segment(subdirs, part, no_fuzzy)
 
 
+def navigate_through_directory_parts(base_dir: Path, parts: List[str], no_fuzzy: bool) -> Optional[Path]:
+    """
+    Navigate through all provided directory parts.
+
+    Args:
+        base_dir: The starting directory
+        parts: List of directory parts to navigate
+        no_fuzzy: Whether to use fuzzy matching
+
+    Returns:
+        The final directory Path if successful, None otherwise.
+    """
+    current_dir = base_dir
+    for i, part in enumerate(parts):
+        if check_skip_directory_part(i, part):
+            continue
+
+        matched = navigate_one_directory_segment(current_dir, part, no_fuzzy)
+        if matched:
+            current_dir = matched
+        else:
+            return None
+    return current_dir
+
+
 def prompt_for_input(
     prompt_text: str,
     enable_path_completion: bool = False,
@@ -1599,13 +1624,6 @@ def prompt_for_input(
             else:
                 return current_dir
 
-        def navigate_through_directory_parts(dir_parts: List[str], base_dir: Path, final_query: str) -> Path:
-            """Navigate through all directory parts, returning final directory."""
-            current_dir = base_dir
-            for i, part in enumerate(dir_parts):
-                current_dir = navigate_segment_with_validation(i, part, current_dir, final_query)
-            return current_dir
-
         def get_path_validation_candidates_or_fail(current_dir: Path) -> List[Path]:
             """Get list of validation candidates (directories and .pem files) from directory."""
             try:
@@ -1650,7 +1668,9 @@ def prompt_for_input(
         def validate_multi_segment_path(text: str, base_dir: Path) -> None:
             """Validate a path containing directory separators."""
             dir_parts, final_query = parse_path_components(text)
-            current_dir = navigate_through_directory_parts(dir_parts, base_dir, final_query)
+            current_dir = base_dir
+            for i, part in enumerate(dir_parts):
+                current_dir = navigate_segment_with_validation(i, part, current_dir, final_query)
             validate_final_query_if_present(final_query, current_dir)
 
         def check_if_special_home_marker(text: str) -> bool:
