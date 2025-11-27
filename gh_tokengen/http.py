@@ -78,6 +78,8 @@ url = {url}
 
             # Run curl
             if debug:
+                debug_print(f"Command: curl --config {config_file}", debug)
+                debug_print(f"Config content:\n{config_content}", debug)
                 debug_print("Executing curl request...", debug)
 
             result: subprocess.CompletedProcess[str] = subprocess.run(
