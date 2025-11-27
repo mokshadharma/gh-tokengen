@@ -2187,6 +2187,56 @@ class KeyBindingHandlers:
 
         return kb
 
+def check_if_path_mode_enabled(enable_path_completion: bool, no_path_completion: bool) -> bool:
+    """Check if path mode is enabled (either completion or validation only)."""
+    return enable_path_completion or no_path_completion
+
+
+class NoPathCompletionValidator:
+    """Validator for paths when path completion is disabled."""
+
+    def __init__(self, state: ValidationState, validation_error_class: type) -> None:
+        """
+        Initialize the validator.
+
+        Args:
+            state: Validation state for error messages
+            validation_error_class: The exception class to raise on validation failure
+        """
+        self.state = state
+        self.validation_error_class = validation_error_class
+
+    def validate_path_exists_or_fail(self, path: Path) -> None:
+        """Validate that path exists, raise error if not."""
+        if not path.exists():
+            raise_validation_error_with_state("file does not exist", self.state, self.validation_error_class)
+
+    def validate_path_is_file_or_fail(self, path: Path) -> None:
+        """Validate that path is a regular file, raise error if not."""
+        if not path.is_file():
+            raise_validation_error_with_state("not a regular file", self.state, self.validation_error_class)
+
+    def validate_path_is_readable_or_fail(self, path: Path) -> None:
+        """Validate that path is readable, raise error if not."""
+        try:
+            with open(path, 'r'):
+                pass
+        except (PermissionError, OSError):
+            raise_validation_error_with_state("file is not readable", self.state, self.validation_error_class)
+
+    def validate(self, expanded_path: Path, cwd: Path) -> None:
+        """
+        Perform validation on the expanded path.
+
+        Args:
+            expanded_path: The path with ~ and env vars expanded
+            cwd: Current working directory for resolving relative paths
+        """
+        absolute_path = make_path_absolute_from_cwd(expanded_path, cwd)
+        self.validate_path_exists_or_fail(absolute_path)
+        self.validate_path_is_file_or_fail(absolute_path)
+        self.validate_path_is_readable_or_fail(absolute_path)
+
 class PromptInputValidator(Validator):
     """Validator for prompt input based on current mode."""
 
@@ -2410,56 +2460,6 @@ def prompt_for_input(
     except (EOFError, KeyboardInterrupt):
         handle_interrupt_error()
 
-
-def check_if_path_mode_enabled(enable_path_completion: bool, no_path_completion: bool) -> bool:
-    """Check if path mode is enabled (either completion or validation only)."""
-    return enable_path_completion or no_path_completion
-
-
-class NoPathCompletionValidator:
-    """Validator for paths when path completion is disabled."""
-
-    def __init__(self, state: ValidationState, validation_error_class: type) -> None:
-        """
-        Initialize the validator.
-
-        Args:
-            state: Validation state for error messages
-            validation_error_class: The exception class to raise on validation failure
-        """
-        self.state = state
-        self.validation_error_class = validation_error_class
-
-    def validate_path_exists_or_fail(self, path: Path) -> None:
-        """Validate that path exists, raise error if not."""
-        if not path.exists():
-            raise_validation_error_with_state("file does not exist", self.state, self.validation_error_class)
-
-    def validate_path_is_file_or_fail(self, path: Path) -> None:
-        """Validate that path is a regular file, raise error if not."""
-        if not path.is_file():
-            raise_validation_error_with_state("not a regular file", self.state, self.validation_error_class)
-
-    def validate_path_is_readable_or_fail(self, path: Path) -> None:
-        """Validate that path is readable, raise error if not."""
-        try:
-            with open(path, 'r'):
-                pass
-        except (PermissionError, OSError):
-            raise_validation_error_with_state("file is not readable", self.state, self.validation_error_class)
-
-    def validate(self, expanded_path: Path, cwd: Path) -> None:
-        """
-        Perform validation on the expanded path.
-
-        Args:
-            expanded_path: The path with ~ and env vars expanded
-            cwd: Current working directory for resolving relative paths
-        """
-        absolute_path = make_path_absolute_from_cwd(expanded_path, cwd)
-        self.validate_path_exists_or_fail(absolute_path)
-        self.validate_path_is_file_or_fail(absolute_path)
-        self.validate_path_is_readable_or_fail(absolute_path)
 
 
 def validate_and_collect_errors(
