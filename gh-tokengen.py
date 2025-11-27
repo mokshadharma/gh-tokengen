@@ -2067,6 +2067,120 @@ class ErrorFlashController:
         else:
             self._perform_normal_tab_completion(buf)
 
+class KeyBindingHandlers:
+    """Handles key bindings for the prompt."""
+
+    def __init__(
+        self,
+        state: ValidationState,
+        enable_path_completion: bool,
+        enter_key_validator: EnterKeyValidator,
+        flash_controller: ErrorFlashController,
+        KeyBindings: type,
+        Keys: Any
+    ) -> None:
+        self.state = state
+        self.enable_path_completion = enable_path_completion
+        self.enter_key_validator = enter_key_validator
+        self.flash_controller = flash_controller
+        self.KeyBindings = KeyBindings
+        self.Keys = Keys
+
+    def create_key_bindings(self) -> Any:
+        """Create and return configured key bindings."""
+        kb = self.KeyBindings()
+
+        @kb.add(self.Keys.Backspace)
+        def handle_backspace(event: Any) -> None:
+            """Handle backspace - keep completions visible."""
+            buf = event.app.current_buffer
+            if buf.cursor_position > 0:
+                buf.delete_before_cursor(count=1)
+                # Trigger completions if path completion is enabled
+                if self.enable_path_completion and not buf.complete_state:
+                    buf.start_completion(select_first=False)
+
+        @kb.add(self.Keys.ControlW)
+        def handle_ctrl_w(event: Any) -> None:
+            """Handle Ctrl-W (delete word) - keep completions visible and save to yank buffer."""
+            buf = event.app.current_buffer
+            # Delete word before cursor (standard behavior)
+            if buf.text:
+                pos = buf.cursor_position
+                # Find start of word
+                text_before = buf.text[:pos]
+
+                # Skip trailing whitespace
+                while text_before and text_before[-1] in ' \t':
+                    text_before = text_before[:-1]
+                # Delete trailing slash if present
+                if text_before and text_before[-1] == '/':
+                    text_before = text_before[:-1]
+                # Delete word characters
+                while text_before and text_before[-1] not in ' \t/':
+                    text_before = text_before[:-1]
+
+                new_pos = len(text_before)
+
+                # Save deleted text to yank buffer
+                deleted_text = buf.text[new_pos:pos]
+                if deleted_text:
+                    self.state.yank_buffer = deleted_text
+
+                buf.cursor_position = new_pos
+                buf.text = text_before + buf.text[pos:]
+
+                # Trigger completions if path completion is enabled
+                if self.enable_path_completion and not buf.complete_state:
+                    buf.start_completion(select_first=False)
+
+        @kb.add(self.Keys.ControlU)
+        def handle_ctrl_u(event: Any) -> None:
+            """Handle Ctrl-U (delete from beginning of line to cursor) - save to yank buffer."""
+            buf = event.app.current_buffer
+            if buf.cursor_position > 0:
+                # Save deleted text to yank buffer
+                deleted_text = buf.text[:buf.cursor_position]
+                if deleted_text:
+                    self.state.yank_buffer = deleted_text
+
+                # Delete from start to cursor
+                buf.text = buf.text[buf.cursor_position:]
+                buf.cursor_position = 0
+
+                # Trigger completions if path completion is enabled
+                if self.enable_path_completion and not buf.complete_state:
+                    buf.start_completion(select_first=False)
+
+        @kb.add(self.Keys.ControlY)
+        def handle_ctrl_y(event: Any) -> None:
+            """Handle Ctrl-Y (yank/paste) - paste back last deleted text."""
+            buf = event.app.current_buffer
+            if self.state.yank_buffer:
+                # Insert yanked text at cursor position
+                pos = buf.cursor_position
+                buf.text = buf.text[:pos] + self.state.yank_buffer + buf.text[pos:]
+                buf.cursor_position = pos + len(self.state.yank_buffer)
+
+                # Trigger completions if path completion is enabled
+                if self.enable_path_completion and not buf.complete_state:
+                    buf.start_completion(select_first=False)
+
+        @kb.add(self.Keys.ControlM)  # Enter key
+        def handle_enter(event: Any) -> None:
+            """Handle Enter key - validate before accepting."""
+            buf = event.app.current_buffer
+            text = buf.text.strip()
+            self.enter_key_validator.validate_and_accept(buf, text)
+
+        @kb.add(self.Keys.ControlI)  # Tab key
+        def handle_tab(event: Any) -> None:
+            """Handle Tab key - show completions or flash error."""
+            buf = event.app.current_buffer
+            self.flash_controller.handle_tab(buf, event)
+
+        return kb
+
 def prompt_for_input(
     prompt_text: str,
     enable_path_completion: bool = False,
@@ -2179,181 +2293,17 @@ def prompt_for_input(
             Path(os.getcwd())
         )
 
-        kb = KeyBindings()
+        flash_controller = ErrorFlashController(state, enable_path_completion)
 
-        @kb.add(Keys.Backspace)
-        def handle_backspace(event: Any) -> None:
-            """Handle backspace - keep completions visible."""
-            buf = event.app.current_buffer
-            if buf.cursor_position > 0:
-                buf.delete_before_cursor(count=1)
-                # Trigger completions if path completion is enabled
-                if enable_path_completion and not buf.complete_state:
-                    buf.start_completion(select_first=False)
-
-        @kb.add(Keys.ControlW)
-        def handle_ctrl_w(event: Any) -> None:
-            """Handle Ctrl-W (delete word) - keep completions visible and save to yank buffer."""
-            buf = event.app.current_buffer
-            # Delete word before cursor (standard behavior)
-            if buf.text:
-                pos = buf.cursor_position
-                # Find start of word
-                text_before = buf.text[:pos]
-
-                # Skip trailing whitespace
-                while text_before and text_before[-1] in ' \t':
-                    text_before = text_before[:-1]
-                # Delete trailing slash if present
-                if text_before and text_before[-1] == '/':
-                    text_before = text_before[:-1]
-                # Delete word characters
-                while text_before and text_before[-1] not in ' \t/':
-                    text_before = text_before[:-1]
-
-                new_pos = len(text_before)
-
-                # Save deleted text to yank buffer
-                deleted_text = buf.text[new_pos:pos]
-                if deleted_text:
-                    state.yank_buffer = deleted_text
-
-                buf.cursor_position = new_pos
-                buf.text = text_before + buf.text[pos:]
-
-                # Trigger completions if path completion is enabled
-                if enable_path_completion and not buf.complete_state:
-                    buf.start_completion(select_first=False)
-
-
-                # Save deleted text to yank buffer
-                deleted_text = buf.text[new_pos:pos]
-                if deleted_text:
-                    state.yank_buffer = deleted_text
-
-                buf.cursor_position = new_pos
-                buf.text = text_before + buf.text[pos:]
-
-                # Trigger completions if path completion is enabled
-                if enable_path_completion and not buf.complete_state:
-                    buf.start_completion(select_first=False)
-
-        @kb.add(Keys.ControlU)
-        def handle_ctrl_u(event: Any) -> None:
-            """Handle Ctrl-U (delete from beginning of line to cursor) - save to yank buffer."""
-            buf = event.app.current_buffer
-            if buf.cursor_position > 0:
-                # Save deleted text to yank buffer
-                deleted_text = buf.text[:buf.cursor_position]
-                if deleted_text:
-                    state.yank_buffer = deleted_text
-
-                # Delete from start to cursor
-                buf.text = buf.text[buf.cursor_position:]
-                buf.cursor_position = 0
-
-                # Trigger completions if path completion is enabled
-                if enable_path_completion and not buf.complete_state:
-                    buf.start_completion(select_first=False)
-
-        @kb.add(Keys.ControlY)
-        def handle_ctrl_y(event: Any) -> None:
-            """Handle Ctrl-Y (yank/paste) - paste back last deleted text."""
-            buf = event.app.current_buffer
-            if state.yank_buffer:
-                # Insert yanked text at cursor position
-                pos = buf.cursor_position
-                buf.text = buf.text[:pos] + state.yank_buffer + buf.text[pos:]
-                buf.cursor_position = pos + len(state.yank_buffer)
-
-                # Trigger completions if path completion is enabled
-                if enable_path_completion and not buf.complete_state:
-                    buf.start_completion(select_first=False)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                return False
-
-            return validate_resolved_path_or_set_error(validation_path, state, Path(os.getcwd()))
-
-
-            return True
-
-
-
-
-        @kb.add(Keys.ControlM)  # Enter key
-        def handle_enter(event: Any) -> None:
-            """Handle Enter key - validate before accepting."""
-            buf = event.app.current_buffer
-            text = buf.text.strip()
-            enter_key_validator.validate_and_accept(buf, text)
-
-        def check_if_should_flash_error(buf: Any) -> bool:
-            """Check if error should be flashed."""
-            return bool(enable_path_completion and state.error_message and not buf.complete_state)
-
-        def enable_flash_error_state() -> None:
-            """Enable flash error state."""
-            state.flash_error = True
-
-        def create_unflash_callback(event: Any) -> Callable[[], None]:
-            """Create callback to unflash error after delay."""
-            def unflash() -> None:
-                time.sleep(0.5)
-                state.flash_error = False
-                event.app.invalidate()
-            return unflash
-
-        def check_if_flash_thread_is_inactive() -> bool:
-            """Check if flash thread is None or not alive."""
-            return state.flash_thread is None or not state.flash_thread.is_alive()
-
-        def start_unflash_thread(unflash_callback: Callable[[], None]) -> None:
-            """Start unflash thread with callback."""
-            state.flash_thread = threading.Thread(target=unflash_callback, daemon=True)
-            if state.flash_thread:
-                state.flash_thread.start()
-
-        def start_unflash_thread_if_inactive(event: Any) -> None:
-            """Start unflash thread if no active thread exists."""
-            if check_if_flash_thread_is_inactive():
-                unflash_callback = create_unflash_callback(event)
-                start_unflash_thread(unflash_callback)
-
-        def perform_error_flash(event: Any) -> None:
-            """Perform error flash animation."""
-            enable_flash_error_state()
-            start_unflash_thread_if_inactive(event)
-
-        def perform_normal_tab_completion(buf: Any) -> None:
-            """Perform normal tab completion."""
-            buf.complete_next()
-
-        def handle_tab_based_on_state(buf: Any, event: Any) -> None:
-            """Handle tab key based on current state."""
-            if check_if_should_flash_error(buf):
-                perform_error_flash(event)
-            else:
-                perform_normal_tab_completion(buf)
-
-        @kb.add(Keys.ControlI)  # Tab key
-        def handle_tab(event: Any) -> None:
-            """Handle Tab key - show completions or flash error."""
-            buf = event.app.current_buffer
-            handle_tab_based_on_state(buf, event)
-
+        key_binding_handlers = KeyBindingHandlers(
+            state,
+            enable_path_completion,
+            enter_key_validator,
+            flash_controller,
+            KeyBindings,
+            Keys
+        )
+        kb = key_binding_handlers.create_key_bindings()
         selected_validator = select_validator_for_mode(enable_path_completion, validator)
         selected_toolbar = select_toolbar_for_modes(enable_path_completion, no_path_completion, validator_func, bottom_toolbar)
 
