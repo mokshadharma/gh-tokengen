@@ -18,7 +18,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, NoReturn, Callable, List, Union, Iterator
 from urllib.parse import urlparse
-import base64
 import re
 import threading
 try:
@@ -259,9 +258,6 @@ def validate_api_url(api_url: str) -> None:
         )
 
 
-def base64url_encode(data: bytes) -> str:
-    """Encode bytes to base64url format without padding."""
-    return base64.urlsafe_b64encode(data).rstrip(b'=').decode('utf-8')
 
 
 def generate_jwt(
@@ -1206,10 +1202,10 @@ def select_editing_mode_by_string(mode_str: str, EditingMode: Any) -> Any:
         return EditingMode.EMACS
 
 
-def create_completer_for_path_mode(enable_path_completion: bool, no_fuzzy: bool, os: Any) -> Optional[Any]:
+def create_completer_for_path_mode(enable_path_completion: bool, no_fuzzy: bool) -> Optional[Any]:
     """Create completer based on path completion mode."""
     if enable_path_completion:
-        base_dir = Path(os.getcwd())
+        base_dir = Path.cwd()
         return FuzzyPemCompleter(base_dir, no_fuzzy=no_fuzzy)
     else:
         return None
@@ -1316,9 +1312,6 @@ def import_prompt_toolkit_modules() -> Dict[str, Any]:
         from prompt_toolkit.formatted_text import HTML
         from prompt_toolkit.key_binding import KeyBindings
         from prompt_toolkit.keys import Keys
-        import os
-        import threading
-        import time
 
         return {
             'PromptSession': PromptSession,
@@ -1329,9 +1322,6 @@ def import_prompt_toolkit_modules() -> Dict[str, Any]:
             'HTML': HTML,
             'KeyBindings': KeyBindings,
             'Keys': Keys,
-            'os': os,
-            'threading': threading,
-            'time': time
         }
     except ImportError as e:
         raise ImportError(f"Required prompt_toolkit modules not found: {e}")
@@ -2391,11 +2381,8 @@ def prompt_for_input(
         HTML = modules['HTML']
         KeyBindings = modules['KeyBindings']
         Keys = modules['Keys']
-        os = modules['os']
-        threading = modules['threading']
-        time = modules['time']
 
-        completer = create_completer_for_path_mode(enable_path_completion, no_fuzzy, os)
+        completer = create_completer_for_path_mode(enable_path_completion, no_fuzzy)
         output = create_output(stdout=sys.stderr)
 
         state = create_validation_state()
@@ -2403,8 +2390,8 @@ def prompt_for_input(
         bottom_toolbar = create_bottom_toolbar_func(state, HTML)
 
         no_path_completion_validator = NoPathCompletionValidator(state, PTValidationError)
-        path_completion_validator = PathCompletionValidator(state, PTValidationError, no_fuzzy, Path(os.getcwd()))
-        path_resolver = FuzzyPathResolver(Path(os.getcwd()), no_fuzzy, enable_path_completion)
+        path_completion_validator = PathCompletionValidator(state, PTValidationError, no_fuzzy, Path.cwd())
+        path_resolver = FuzzyPathResolver(Path.cwd(), no_fuzzy, enable_path_completion)
 
         validator = PromptInputValidator(
             state,
@@ -2414,7 +2401,7 @@ def prompt_for_input(
             path_completion_validator,
             no_path_completion_validator,
             PTValidationError,
-            Path(os.getcwd())
+            Path.cwd()
         )
 
         # Custom key bindings
@@ -2424,7 +2411,7 @@ def prompt_for_input(
             no_path_completion,
             path_resolver,
             validator_func,
-            Path(os.getcwd())
+            Path.cwd()
         )
 
         flash_controller = ErrorFlashController(state, enable_path_completion)
