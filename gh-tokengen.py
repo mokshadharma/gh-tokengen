@@ -1816,6 +1816,11 @@ class FuzzyPathResolver:
         return self._resolve_path_with_error_handling(text) if self._validate_path_resolution_preconditions(text) else None
 
 
+def check_if_text_is_empty(text: str) -> bool:
+    """Check if text is empty (validation should be skipped)."""
+    return not text
+
+
 def prompt_for_input(
     prompt_text: str,
     enable_path_completion: bool = False,
@@ -1869,10 +1874,6 @@ def prompt_for_input(
             """Clear error message at the start of validation."""
             state.error_message = ""
 
-        def check_if_text_empty(text: str) -> bool:
-            """Check if text is empty (validation should be skipped)."""
-            return not text
-
         def select_validation_path_for_no_completion(text: str) -> str:
             """Return validation path for no_path_completion mode."""
             return text
@@ -1919,7 +1920,7 @@ def prompt_for_input(
 
         def handle_empty_text_or_validate(text: str) -> None:
             """Handle empty text case or proceed with validation."""
-            if check_if_text_empty(text):
+            if check_if_text_is_empty(text):
                 return
             execute_validation_workflow(text)
 
@@ -2012,10 +2013,6 @@ def prompt_for_input(
                 if enable_path_completion and not buf.complete_state:
                     buf.start_completion(select_first=False)
 
-
-        def check_if_text_is_empty(text: str) -> bool:
-            """Check if text is empty."""
-            return not text
 
         def resolve_and_update_buffer_or_use_text(buf: Any, text: str) -> Tuple[str, str]:
             """Resolve fuzzy path and update buffer, or return original text."""
