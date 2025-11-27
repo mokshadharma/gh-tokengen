@@ -139,9 +139,25 @@ url = {url}
                 eprint(f"[DEBUG] Final URL: {effective_url}")
 
             if debug:
-                eprint("\n[DEBUG] Final response:")
-                eprint(f"[DEBUG]   Status: {http_code}")
-                eprint(f"[DEBUG]   URL: {effective_url}")
+                if raw_headers:
+                    debug_blocks = raw_headers.strip().split('\r\n\r\n')
+                    if not debug_blocks or not debug_blocks[-1]:
+                        debug_blocks = raw_headers.strip().split('\n\n')
+
+                    for i, block in enumerate(debug_blocks):
+                        lines = block.split('\n')
+                        status_line = lines[0].strip() if lines else "Unknown"
+                        if i == len(debug_blocks) - 1:
+                            eprint("\n[DEBUG] Final response:")
+                            eprint(f"[DEBUG]   Status: {http_code}")
+                            eprint(f"[DEBUG]   URL: {effective_url}")
+                        else:
+                            eprint(f"\n[DEBUG] Response {i + 1}:")
+                            eprint(f"[DEBUG]   Status: {status_line}")
+                else:
+                    eprint("\n[DEBUG] Final response:")
+                    eprint(f"[DEBUG]   Status: {http_code}")
+                    eprint(f"[DEBUG]   URL: {effective_url}")
 
             # Check for HTTP errors
             if http_code >= 400 or result.returncode != 0:
