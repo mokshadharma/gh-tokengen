@@ -1906,7 +1906,7 @@ def prompt_for_input(
 
         def check_if_path_validation_enabled() -> bool:
             """Check if path validation is enabled in current mode."""
-            return enable_path_completion or no_path_completion
+            return check_if_path_mode_enabled(enable_path_completion, no_path_completion)
 
         def dispatch_validation_by_mode(text: str) -> None:
             """Dispatch validation based on whether path validation is enabled."""
@@ -2012,10 +2012,6 @@ def prompt_for_input(
                 if enable_path_completion and not buf.complete_state:
                     buf.start_completion(select_first=False)
 
-
-        def check_if_path_mode_enabled() -> bool:
-            """Check if any path mode is enabled."""
-            return enable_path_completion or no_path_completion
 
         def check_if_text_is_empty(text: str) -> bool:
             """Check if text is empty."""
@@ -2136,7 +2132,7 @@ def prompt_for_input(
 
         def perform_validation_by_mode(buf: Any, text: str) -> bool:
             """Perform validation based on current mode, return False if validation fails."""
-            if check_if_path_mode_enabled():
+            if check_if_path_mode_enabled(enable_path_completion, no_path_completion):
                 return handle_path_mode_validation(buf, text)
             else:
                 return handle_non_path_mode_validation(text)
@@ -2235,6 +2231,11 @@ def prompt_for_input(
         return handle_import_error_with_fallback(e, prompt_text)
     except (EOFError, KeyboardInterrupt):
         handle_interrupt_error()
+
+
+def check_if_path_mode_enabled(enable_path_completion: bool, no_path_completion: bool) -> bool:
+    """Check if path mode is enabled (either completion or validation only)."""
+    return enable_path_completion or no_path_completion
 
 
 class NoPathCompletionValidator:
