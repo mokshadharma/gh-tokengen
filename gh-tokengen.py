@@ -1603,7 +1603,7 @@ class PathCompletionValidator:
 
         if not matched:
 
-            raise_validation_error_with_state(f"directory '{part}' not found", self.state, self.validation_error_class)
+            raise_validation_error_with_state(f"directory '{part}' not found", this.state, self.validation_error_class)
 
         return matched
 
@@ -1638,6 +1638,182 @@ class PathCompletionValidator:
             self._validate_multi_segment_path(text, base_dir)
         else:
             self._validate_single_segment_path(text, base_dir)
+
+
+class FuzzyPathResolver:
+    """Resolves fuzzy path input to actual filesystem paths."""
+
+    def __init__(self, cwd: Path, no_fuzzy: bool, enable_path_completion: bool) -> None:
+        """
+        Initialize the resolver.
+
+        Args:
+            cwd: Current working directory
+            no_fuzzy: Whether to use fuzzy matching
+            enable_path_completion: Whether path completion is enabled
+        """
+        self.cwd = cwd
+        self.no_fuzzy = no_fuzzy
+        self.enable_path_completion = enable_path_completion
+        try:
+            from rapidfuzz import fuzz, process
+            self.fuzz: Any = fuzz
+            self.process: Any = process
+        except ImportError:
+            self.fuzz = None
+            self.process = None
+
+    def _collect_directory_candidates(self, directory: Path) -> List[Path]:
+        """Collect directory items from a path, returning empty list if unavailable."""
+        return [item for item in directory.iterdir() if item.is_dir()] if directory.exists() else []
+
+    def _collect_final_segment_candidates(self, directory: Path) -> List[Path]:
+        """Collect both directories and .pem files from a path."""
+        return [item for item in directory.iterdir()
+               if item.is_dir() or (item.is_file() and item.suffix.lower() == '.pem')] if directory.exists() else []
+
+    def _collect_candidates_for_segment(self, directory: Path, is_final_segment: bool) -> List[Path]:
+        """Collect candidates based on whether this is the final path segment."""
+        return self._collect_final_segment_candidates(directory) if is_final_segment else self._collect_directory_candidates(directory)
+
+    def _find_exact_match(self, candidates: List[Path], name: str) -> Optional[Path]:
+        """Find exact name match in candidate list."""
+        return next((c for c in candidates if c.name == name), None)
+
+    def _filter_candidates_by_query(self, candidates: List[Path], query: str) -> List[Path]:
+        """Filter candidates to those matching the query."""
+        return [c for c in candidates if match_query_against_target(query, c.name, self.no_fuzzy)]
+
+    def _select_first_candidate(self, candidates: List[Path]) -> Path:
+        """Select the first candidate from a list."""
+        return candidates[0]
+
+    def _score_and_select_best_fuzzy_match(self, candidates: List[Path], query: str) -> Optional[Path]:
+        """Score candidates and return the best fuzzy match."""
+        if not self.process or not self.fuzz:
+            return None
+        names: List[str] = [c.name for c in candidates]
+        matches: List[Tuple[str, float, int]] = self.process.extract(query, names, scorer=self.fuzz.QRatio, limit=1)
+        return next((c for c in candidates if c.name == matches[0][0]), None) if matches else None
+
+    def _select_best_fuzzy_candidate(self, candidates: List[Path], query: str) -> Path:
+        """Select best candidate using fuzzy scoring."""
+        return self._score_and_select_best_fuzzy_match(candidates, query) or candidates[0]
+
+    def _select_candidate_by_mode(self, candidates: List[Path], query: str) -> Path:
+        """Select best candidate based on current fuzzy mode setting."""
+        return self._select_first_candidate(candidates) if self.no_fuzzy else self._select_best_fuzzy_candidate(candidates, query)
+
+    def _resolve_segment_match(self, candidates: List[Path], segment: str) -> Optional[Path]:
+        """Resolve a path segment to a matched candidate path."""
+        exact = self._find_exact_match(candidates, segment)
+        return exact or (lambda filtered: self._select_candidate_by_mode(filtered, segment) if filtered else None)(self._filter_candidates_by_query(candidates, segment))
+
+    def _determine_root_for_absolute_path(self) -> Tuple[Path, int, List[str]]:
+        """Determine base directory for absolute paths starting with /."""
+        return (Path('/'), 1, [''])
+
+    def _determine_root_for_tilde_path(self) -> Tuple[Path, int, List[str]]:
+        """Determine base directory for paths starting with ~/."""
+        return (Path.home(), 1, ['~'])
+
+    def _determine_root_for_home_path(self) -> Tuple[Path, int, List[str]]:
+        """Determine base directory for paths starting with $HOME/."""
+        return (Path.home(), 1, ['$HOME'])
+
+    def _determine_root_for_relative_path(self) -> Tuple[Path, int, List[str]]:
+        """Determine base directory for relative paths."""
+        return (self.cwd, 0, [])
+
+    def _select_path_root_handler(self, text: str) -> Callable[[], Tuple[Path, int, List[str]]]:
+        """Select the appropriate root handler based on path prefix."""
+        starts_with_tilde = text.startswith('~/')
+        starts_with_home = text.startswith('$HOME/')
+        starts_with_slash = text.startswith('/')
+
+        return (self._determine_root_for_absolute_path if starts_with_slash else
+               self._determine_root_for_tilde_path if starts_with_tilde else
+               self._determine_root_for_home_path if starts_with_home else
+               self._determine_root_for_relative_path)
+
+    def _initialize_path_navigation(self, text: str) -> Tuple[Path, int, List[str]]:
+        """Initialize base directory, start index, and unexpanded parts for path navigation."""
+        handler = self._select_path_root_handler(text)
+        return handler()
+
+    def _skip_empty_or_special_part(self, part: str) -> bool:
+        """Determine if a path part should be skipped during navigation."""
+        return not part or part in ('~', '$HOME')
+
+    def _build_formatted_path_result(self, unexpanded_parts: List[str], resolved_path: Path) -> Tuple[str, str]:
+        """Build the final result tuple with unexpanded and expanded paths."""
+        unexpanded = '/'.join(unexpanded_parts)
+        return (unexpanded, str(resolved_path))
+
+    def _navigate_through_path_segments(self, parts: List[str], start_idx: int, initial_dir: Path, unexpanded_parts: List[str]) -> Optional[Tuple[Path, List[str]]]:
+        """Navigate through all path segments, resolving each one."""
+        current_dir = initial_dir
+
+        for i in range(start_idx, len(parts)):
+            part = parts[i]
+
+            if self._skip_empty_or_special_part(part):
+                continue
+
+            is_final = (i == len(parts) - 1)
+            candidates = self._collect_candidates_for_segment(current_dir, is_final)
+            matched = self._resolve_segment_match(candidates, part)
+
+            if not matched:
+                return None
+
+            current_dir = matched
+            unexpanded_parts.append(matched.name)
+
+        return (current_dir, unexpanded_parts)
+
+    def _resolve_multi_segment_path(self, text: str) -> Optional[Tuple[str, str]]:
+        """Resolve a path with multiple segments (contains /)."""
+        parts = text.split('/')
+        current_dir, start_idx, unexpanded_parts = self._initialize_path_navigation(text)
+        navigation_result = self._navigate_through_path_segments(parts, start_idx, current_dir, unexpanded_parts)
+        return self._build_formatted_path_result(navigation_result[1], navigation_result[0]) if navigation_result else None
+
+    def _resolve_single_segment_path(self, text: str) -> Optional[Tuple[str, str]]:
+        """Resolve a simple path with no directory separators."""
+        base_dir = self.cwd
+        candidates = self._collect_final_segment_candidates(base_dir)
+        exact = self._find_exact_match(candidates, text)
+
+        if exact:
+            return (text, str(exact))
+
+        filtered = self._filter_candidates_by_query(candidates, text)
+        return ((lambda m: (m.name, str(m)))(self._select_candidate_by_mode(filtered, text))) if filtered else None
+
+    def _dispatch_path_resolution(self, text: str) -> Optional[Tuple[str, str]]:
+        """Dispatch to appropriate path resolution strategy based on path structure."""
+        return self._resolve_multi_segment_path(text) if '/' in text else self._resolve_single_segment_path(text)
+
+    def _resolve_path_with_error_handling(self, text: str) -> Optional[Tuple[str, str]]:
+        """Resolve path with exception handling, returning None on any error."""
+        try:
+            return self._dispatch_path_resolution(text)
+        except Exception:
+            return None
+
+    def _validate_path_resolution_preconditions(self, text: str) -> bool:
+        """Check if preconditions for path resolution are met."""
+        return bool(text and self.enable_path_completion)
+
+    def resolve(self, text: str) -> Optional[Tuple[str, str]]:
+        """
+        Resolve a fuzzy path to an actual full path.
+
+        Returns:
+            Tuple of (unexpanded_path, expanded_path) or None if no match
+        """
+        return self._resolve_path_with_error_handling(text) if self._validate_path_resolution_preconditions(text) else None
 
 
 def prompt_for_input(
@@ -1686,6 +1862,7 @@ def prompt_for_input(
 
         no_path_completion_validator = NoPathCompletionValidator(state, PTValidationError)
         path_completion_validator = PathCompletionValidator(state, PTValidationError, no_fuzzy, Path(os.getcwd()))
+        path_resolver = FuzzyPathResolver(Path(os.getcwd()), no_fuzzy, enable_path_completion)
 
         # Helper functions for validation logic
         def clear_error_state() -> None:
@@ -1695,6 +1872,20 @@ def prompt_for_input(
         def check_if_text_empty(text: str) -> bool:
             """Check if text is empty (validation should be skipped)."""
             return not text
+
+        def select_validation_path_for_no_completion(text: str) -> str:
+            """Return validation path for no_path_completion mode."""
+            return text
+
+        def update_buffer_with_resolved_path(buf: Any, unexpanded_path: str) -> None:
+            """Update buffer text and cursor position with resolved path."""
+            buf.text = unexpanded_path
+            buf.cursor_position = len(unexpanded_path)
+
+        def get_expanded_path_from_result(result: Tuple[str, str]) -> Tuple[str, str]:
+            """Extract unexpanded and expanded paths from resolution result."""
+            unexpanded_path, expanded_path = result
+            return unexpanded_path, expanded_path
 
         def dispatch_validation_by_completion_mode(expanded_path: Path, text: str) -> None:
             """Dispatch to appropriate validation handler based on completion mode."""
@@ -1822,160 +2013,6 @@ def prompt_for_input(
                     buf.start_completion(select_first=False)
 
 
-        def collect_directory_candidates(directory: Path) -> List[Path]:
-            """Collect directory items from a path, returning empty list if unavailable."""
-            return [item for item in directory.iterdir() if item.is_dir()] if directory.exists() else []
-
-        def collect_final_segment_candidates(directory: Path) -> List[Path]:
-            """Collect both directories and .pem files from a path."""
-            return [item for item in directory.iterdir()
-                   if item.is_dir() or (item.is_file() and item.suffix.lower() == '.pem')] if directory.exists() else []
-
-        def collect_candidates_for_segment(directory: Path, is_final_segment: bool) -> List[Path]:
-            """Collect candidates based on whether this is the final path segment."""
-            return collect_final_segment_candidates(directory) if is_final_segment else collect_directory_candidates(directory)
-
-        def find_exact_match(candidates: List[Path], name: str) -> Optional[Path]:
-            """Find exact name match in candidate list."""
-            return next((c for c in candidates if c.name == name), None)
-
-        def filter_candidates_by_query(candidates: List[Path], query: str) -> List[Path]:
-            """Filter candidates to those matching the query."""
-            return [c for c in candidates if match_query_against_target(query, c.name, no_fuzzy)]
-
-        def select_first_candidate(candidates: List[Path]) -> Path:
-            """Select the first candidate from a list."""
-            return candidates[0]
-
-        def score_and_select_best_fuzzy_match(candidates: List[Path], query: str) -> Optional[Path]:
-            """Score candidates and return the best fuzzy match."""
-            from rapidfuzz import fuzz, process
-            names: List[str] = [c.name for c in candidates]
-            matches: List[Tuple[str, float, int]] = process.extract(query, names, scorer=fuzz.QRatio, limit=1)
-            return next((c for c in candidates if c.name == matches[0][0]), None) if matches else None
-
-        def select_best_fuzzy_candidate(candidates: List[Path], query: str) -> Path:
-            """Select best candidate using fuzzy scoring."""
-            return score_and_select_best_fuzzy_match(candidates, query) or candidates[0]
-
-        def select_candidate_by_mode(candidates: List[Path], query: str) -> Path:
-            """Select best candidate based on current fuzzy mode setting."""
-            return select_first_candidate(candidates) if no_fuzzy else select_best_fuzzy_candidate(candidates, query)
-
-        def resolve_segment_match(candidates: List[Path], segment: str) -> Optional[Path]:
-            """Resolve a path segment to a matched candidate path."""
-            exact = find_exact_match(candidates, segment)
-            return exact or (lambda filtered: select_candidate_by_mode(filtered, segment) if filtered else None)(filter_candidates_by_query(candidates, segment))
-
-        def determine_root_for_absolute_path() -> Tuple[Path, int, List[str]]:
-            """Determine base directory for absolute paths starting with /."""
-            return (Path('/'), 1, [''])
-
-        def determine_root_for_tilde_path() -> Tuple[Path, int, List[str]]:
-            """Determine base directory for paths starting with ~/."""
-            return (Path.home(), 1, ['~'])
-
-        def determine_root_for_home_path() -> Tuple[Path, int, List[str]]:
-            """Determine base directory for paths starting with $HOME/."""
-            return (Path.home(), 1, ['$HOME'])
-
-        def determine_root_for_relative_path() -> Tuple[Path, int, List[str]]:
-            """Determine base directory for relative paths."""
-            return (Path(os.getcwd()), 0, [])
-
-        def select_path_root_handler(text: str) -> Callable[[], Tuple[Path, int, List[str]]]:
-            """Select the appropriate root handler based on path prefix."""
-            starts_with_tilde = text.startswith('~/')
-            starts_with_home = text.startswith('$HOME/')
-            starts_with_slash = text.startswith('/')
-
-            return (determine_root_for_absolute_path if starts_with_slash else
-                   determine_root_for_tilde_path if starts_with_tilde else
-                   determine_root_for_home_path if starts_with_home else
-                   determine_root_for_relative_path)
-
-        def initialize_path_navigation(text: str) -> Tuple[Path, int, List[str]]:
-            """Initialize base directory, start index, and unexpanded parts for path navigation."""
-            handler = select_path_root_handler(text)
-            return handler()
-
-        def skip_empty_or_special_part(part: str) -> bool:
-            """Determine if a path part should be skipped during navigation."""
-            return not part or part in ('~', '$HOME')
-
-        def build_formatted_path_result(unexpanded_parts: List[str], resolved_path: Path) -> Tuple[str, str]:
-            """Build the final result tuple with unexpanded and expanded paths."""
-            unexpanded = '/'.join(unexpanded_parts)
-            return (unexpanded, str(resolved_path))
-
-
-        def navigate_through_path_segments(parts: List[str], start_idx: int, initial_dir: Path, unexpanded_parts: List[str]) -> Optional[Tuple[Path, List[str]]]:
-            """Navigate through all path segments, resolving each one."""
-            current_dir = initial_dir
-
-            for i in range(start_idx, len(parts)):
-                part = parts[i]
-
-
-
-                if skip_empty_or_special_part(part):
-                    continue
-
-                is_final = ( i == len(parts) - 1)
-                candidates = collect_candidates_for_segment(current_dir, is_final)
-                matched = resolve_segment_match(candidates, part)
-
-                if not matched:
-
-                    return None
-
-                current_dir = matched
-                unexpanded_parts.append(matched.name)
-
-            return (current_dir, unexpanded_parts)
-
-        def resolve_multi_segment_path(text: str) -> Optional[Tuple[str, str]]:
-            """Resolve a path with multiple segments (contains /)."""
-            parts = text.split('/')
-            current_dir, start_idx, unexpanded_parts = initialize_path_navigation(text)
-            navigation_result = navigate_through_path_segments(parts, start_idx, current_dir, unexpanded_parts)
-            return build_formatted_path_result(navigation_result[1], navigation_result[0]) if navigation_result else None
-
-        def resolve_single_segment_path(text: str) -> Optional[Tuple[str, str]]:
-            """Resolve a simple path with no directory separators."""
-            base_dir = Path(os.getcwd())
-            candidates = collect_final_segment_candidates(base_dir)
-            exact = find_exact_match(candidates, text)
-
-            if exact:
-                return (text, str(exact))
-
-            filtered = filter_candidates_by_query(candidates, text)
-            return ((lambda m: (m.name, str(m)))(select_candidate_by_mode(filtered, text))) if filtered else None
-
-        def dispatch_path_resolution(text: str) -> Optional[Tuple[str, str]]:
-            """Dispatch to appropriate path resolution strategy based on path structure."""
-            return resolve_multi_segment_path(text) if '/' in text else resolve_single_segment_path(text)
-
-        def resolve_path_with_error_handling(text: str) -> Optional[Tuple[str, str]]:
-            """Resolve path with exception handling, returning None on any error."""
-            try:
-                return dispatch_path_resolution(text)
-            except Exception:
-                return None
-
-        def validate_path_resolution_preconditions(text: str) -> bool:
-            """Check if preconditions for path resolution are met."""
-            return bool(text and enable_path_completion)
-
-        def resolve_fuzzy_path(text: str) -> Optional[Tuple[str, str]]:
-            """Resolve a fuzzy path to an actual full path.
-
-            Returns:
-                Tuple of (unexpanded_path, expanded_path) or None if no match
-            """
-            return resolve_path_with_error_handling(text) if validate_path_resolution_preconditions(text) else None
-
         def check_if_path_mode_enabled() -> bool:
             """Check if any path mode is enabled."""
             return enable_path_completion or no_path_completion
@@ -2000,7 +2037,7 @@ def prompt_for_input(
 
         def resolve_and_update_buffer_or_use_text(buf: Any, text: str) -> Tuple[str, str]:
             """Resolve fuzzy path and update buffer, or return original text."""
-            result = resolve_fuzzy_path(text)
+            result = path_resolver.resolve(text)
             if result:
                 unexpanded_path, expanded_path = get_expanded_path_from_result(result)
                 update_buffer_with_resolved_path(buf, unexpanded_path)
