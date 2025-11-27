@@ -2255,6 +2255,61 @@ class PromptInputValidator(Validator):
         text = document.text.strip()
         self._clear_error_state()
         self._handle_empty_text_or_validate(text)
+class PromptSessionFactory:
+    """Factory for creating configured PromptSession instances."""
+
+    def __init__(
+        self,
+        prompt_text: str,
+        enable_path_completion: bool,
+        no_path_completion: bool,
+        validator_func: Optional[Callable[[str], None]],
+        state: ValidationState,
+        PromptSession: Any,
+        EditingMode: Any,
+        completer: Optional[Any],
+        output: Any,
+        validator: Any,
+        key_bindings: Any,
+        bottom_toolbar: Callable[[], Any]
+    ) -> None:
+        self.prompt_text = prompt_text
+        self.enable_path_completion = enable_path_completion
+        self.no_path_completion = no_path_completion
+        self.validator_func = validator_func
+        self.state = state
+        self.PromptSession = PromptSession
+        self.EditingMode = EditingMode
+        self.completer = completer
+        self.output = output
+        self.validator = validator
+        self.key_bindings = key_bindings
+        self.bottom_toolbar = bottom_toolbar
+
+    def create_session(self) -> Any:
+        """Create and return a configured PromptSession."""
+        mode_str = detect_editing_mode_from_inputrc()
+        editing_mode = select_editing_mode_by_string(mode_str, self.EditingMode)
+
+        selected_validator = select_validator_for_mode(self.enable_path_completion, self.validator)
+        selected_toolbar = select_toolbar_for_modes(self.enable_path_completion, self.no_path_completion, self.validator_func, self.bottom_toolbar)
+
+        session = self.PromptSession(
+            message=self.prompt_text,
+            editing_mode=editing_mode,
+            completer=self.completer,
+            complete_while_typing=self.enable_path_completion,
+            output=self.output,
+            enable_history_search=False,
+            validator=selected_validator,
+            validate_while_typing=self.enable_path_completion,
+            key_bindings=self.key_bindings,
+            bottom_toolbar=selected_toolbar,
+            reserve_space_for_menu=8
+        )
+
+        attach_text_handlers_for_modes(session, self.no_path_completion, self.enable_path_completion, self.completer, self.state)
+        return session
 def prompt_for_input(
     prompt_text: str,
     enable_path_completion: bool = False,
@@ -2290,8 +2345,6 @@ def prompt_for_input(
         threading = modules['threading']
         time = modules['time']
 
-        mode_str = detect_editing_mode_from_inputrc()
-        editing_mode = select_editing_mode_by_string(mode_str, EditingMode)
         completer = create_completer_for_path_mode(enable_path_completion, no_fuzzy, os)
         output = create_output(stdout=sys.stderr)
 
@@ -2335,24 +2388,21 @@ def prompt_for_input(
             Keys
         )
         kb = key_binding_handlers.create_key_bindings()
-        selected_validator = select_validator_for_mode(enable_path_completion, validator)
-        selected_toolbar = select_toolbar_for_modes(enable_path_completion, no_path_completion, validator_func, bottom_toolbar)
-
-        session = PromptSession(
-            message=prompt_text,
-            editing_mode=editing_mode,
-            completer=completer,
-            complete_while_typing=enable_path_completion,
-            output=output,
-            enable_history_search=False,
-            validator=selected_validator,
-            validate_while_typing=enable_path_completion,
-            key_bindings=kb,
-            bottom_toolbar=selected_toolbar,
-            reserve_space_for_menu=8
+        session_factory = PromptSessionFactory(
+            prompt_text,
+            enable_path_completion,
+            no_path_completion,
+            validator_func,
+            state,
+            PromptSession,
+            EditingMode,
+            completer,
+            output,
+            validator,
+            kb,
+            bottom_toolbar
         )
-
-        attach_text_handlers_for_modes(session, no_path_completion, enable_path_completion, completer, state)
+        session = session_factory.create_session()
         return prompt_with_session(session)
 
     except ImportError as e:
