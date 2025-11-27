@@ -230,7 +230,6 @@ def validate_path_is_pem_or_abort(path: Path, state: ValidationState) -> bool:
         return False
     return True
 
-    enable_path_completion: bool = False,
 def perform_path_validation_checks(path: Path, state: ValidationState) -> bool:
     """Perform all path validation checks, return False on any failure."""
     return (validate_path_exists_or_abort(path, state) and
@@ -274,7 +273,6 @@ def handle_non_path_mode_validation(text: str, validator_func: Optional[Callable
     """Handle validation for non-path modes, return False if validation fails."""
     return validate_with_custom_validator_or_set_error(text, validator_func, state)
 
-    validator_func: Optional[Callable[[str], None]] = None,
 def check_if_path_mode_enabled(enable_path_completion: bool, no_path_completion: bool) -> bool:
     """Check if path mode is enabled (either completion or validation only)."""
     return enable_path_completion or no_path_completion
@@ -287,12 +285,10 @@ def perform_validation_by_mode(buf: Any, text: str, state: ValidationState, cwd:
     else:
         return handle_non_path_mode_validation(text, validator_func, state)
 
-    no_fuzzy: bool = False,
 def accept_buffer_input(buf: Any) -> None:
     """Accept the buffer input."""
     buf.validate_and_handle()
 
-    no_path_completion: bool = False
 def validate_and_accept_if_valid(buf: Any, text: str, state: ValidationState, cwd: Path, enable_path_completion: bool, no_path_completion: bool, path_resolver: FuzzyPathResolver, validator_func: Optional[Callable[[str], None]]) -> None:
     """Validate input and accept if valid."""
     if perform_validation_by_mode(buf, text, state, cwd, enable_path_completion, no_path_completion, path_resolver, validator_func):

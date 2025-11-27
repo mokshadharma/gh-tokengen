@@ -33,7 +33,6 @@ def prompt_for_input(
         PromptSession = modules['PromptSession']
         EditingMode = modules['EditingMode']
         create_output = modules['create_output']
-        Validator = modules['Validator']
         PTValidationError = modules['PTValidationError']
         HTML = modules['HTML']
         KeyBindings = modules['KeyBindings']

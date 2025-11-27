@@ -1,6 +1,6 @@
 import threading
 import time
-from typing import Any, Optional, Callable, Dict
+from typing import Any, Optional, Callable, Dict, NoReturn
 from gh_tokengen.utils import eprint, fatal_error
 from gh_tokengen.interactive.ui import ValidationState, ErrorFlashController
 from gh_tokengen.interactive.validators import EnterKeyValidator

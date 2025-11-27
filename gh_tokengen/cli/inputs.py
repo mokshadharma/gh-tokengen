@@ -2,7 +2,7 @@ import sys
 import argparse
 from typing import Optional, Tuple
 from pathlib import Path
-from gh_tokengen.utils import fatal_error, expand_path, eprint
+from gh_tokengen.utils import fatal_error, expand_path, eprint, ValidationError
 from gh_tokengen.validation import validate_client_id, validate_pem_file, validate_installation_id
 from gh_tokengen.interactive.prompt import prompt_for_input
 from gh_tokengen.cli.args import validate_and_collect_errors
