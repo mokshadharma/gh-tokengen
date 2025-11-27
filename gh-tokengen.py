@@ -1483,6 +1483,15 @@ def get_subdirectories_from_path(current_dir: Path) -> List[Path]:
         return []
 
 
+def check_skip_directory_part(i: int, part: str) -> bool:
+    """Determine if directory part should be skipped during navigation."""
+    if not part:
+        return True
+    if i == 0 and part in ('~', '$HOME'):
+        return True
+    return False
+
+
 def prompt_for_input(
     prompt_text: str,
     enable_path_completion: bool = False,
@@ -1560,14 +1569,6 @@ def prompt_for_input(
             validate_path_exists_or_fail(absolute_path)
             validate_path_is_file_or_fail(absolute_path)
             validate_path_is_readable_or_fail(absolute_path)
-
-        def check_skip_directory_part(i: int, part: str) -> bool:
-            """Determine if directory part should be skipped during navigation."""
-            if not part:
-                return True
-            if i == 0 and part in ('~', '$HOME'):
-                return True
-            return False
 
         def validate_directory_exists_for_query_or_fail(current_dir: Path, final_query: str) -> None:
             """Validate directory exists when there's a final query to match."""
