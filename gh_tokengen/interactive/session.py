@@ -1,3 +1,5 @@
+import threading
+import time
 import sys
 from pathlib import Path
 from typing import Any, Optional, Callable, Dict
@@ -99,6 +101,8 @@ def import_prompt_toolkit_modules() -> Dict[str, Any]:
         from prompt_toolkit.formatted_text import HTML
         from prompt_toolkit.key_binding import KeyBindings
         from prompt_toolkit.keys import Keys
+        from prompt_toolkit.selection import SelectionType
+        from prompt_toolkit.selection import SelectionState
 
         return {
             'PromptSession': PromptSession,
@@ -109,6 +113,8 @@ def import_prompt_toolkit_modules() -> Dict[str, Any]:
             'HTML': HTML,
             'KeyBindings': KeyBindings,
             'Keys': Keys,
+                'SelectionType': SelectionType,
+                'SelectionState': SelectionState,
         }
     except ImportError as e:
         raise ImportError(f"Required prompt_toolkit modules not found: {e}")
@@ -124,7 +130,9 @@ class KeyBindingHandlers:
         enter_key_validator: EnterKeyValidator,
         flash_controller: ErrorFlashController,
         KeyBindings: type,
-        Keys: Any
+        Keys: Any,
+            SelectionType: Any,
+            SelectionState: Any,
     ) -> None:
         self.state = state
         self.enable_path_completion = enable_path_completion
@@ -132,6 +140,8 @@ class KeyBindingHandlers:
         self.flash_controller = flash_controller
         self.KeyBindings = KeyBindings
         self.Keys = Keys
+        self.SelectionState = SelectionState
+        self.SelectionType = SelectionType
 
     def create_key_bindings(self) -> Any:
         """Create and return configured key bindings."""
@@ -209,6 +219,31 @@ class KeyBindingHandlers:
                 buf.text = buf.text[:pos] + self.state.yank_buffer + buf.text[pos:]
                 buf.cursor_position = pos + len(self.state.yank_buffer)
 
+                # Trigger completions if path completion is enabled
+                if self.enable_path_completion and not buf.complete_state:
+                    buf.start_completion(select_first=False)
+
+        @kb.add('/')
+        def handle_slash(event: Any) -> None:
+            """Handle forward slash - prevent double slashes."""
+            buf = event.app.current_buffer
+            if buf.cursor_position > 0 and buf.text[buf.cursor_position - 1] == '/':
+                # Flash the slash by selecting it briefly without moving cursor
+                # This preserves the completion menu state
+                buf.selection_state = self.SelectionState(
+                    original_cursor_position=buf.cursor_position - 1,
+                    type=self.SelectionType.CHARACTERS
+                )
+                
+                def unflash() -> None:
+                    time.sleep(0.1)
+                    buf.selection_state = None
+                    event.app.invalidate()
+
+                t = threading.Thread(target=unflash, daemon=True)
+                t.start()
+            else:
+                buf.insert_text('/')
                 # Trigger completions if path completion is enabled
                 if self.enable_path_completion and not buf.complete_state:
                     buf.start_completion(select_first=False)

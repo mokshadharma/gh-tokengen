@@ -38,7 +38,9 @@ def prompt_for_input(
         HTML = modules['HTML']
         KeyBindings = modules['KeyBindings']
         Keys = modules['Keys']
+        SelectionType = modules['SelectionType']
 
+        SelectionState = modules['SelectionState']
         completer = create_completer_for_path_mode(enable_path_completion, no_fuzzy)
         output = create_output(stdout=sys.stderr)
 
@@ -79,7 +81,9 @@ def prompt_for_input(
             enter_key_validator,
             flash_controller,
             KeyBindings,
-            Keys
+            Keys,
+            SelectionType,
+            SelectionState,
         )
         kb = key_binding_handlers.create_key_bindings()
         session_factory = PromptSessionFactory(
