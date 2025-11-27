@@ -32,6 +32,8 @@ This tool is useful for developers and system administrators who need to program
 - Python 3.14 or higher
 - `PyJWT` library
 - `cryptography` library
+- `prompt-toolkit` library
+- `rapidfuzz` library
 
 ### Installation
 
@@ -429,12 +431,7 @@ The Installation ID is a number you can find in the URL when viewing your app's 
 
 Install the required Python packages inside the virtual environment:
 ```bash
-.venv/bin/pip install PyJWT cryptography
-```
-
-For interactive path completion features, `prompt-toolkit` and `rapidfuzz` are recommended but optional:
-```bash
-.venv/bin/pip install prompt-toolkit rapidfuzz
+.venv/bin/pip install PyJWT cryptography prompt-toolkit rapidfuzz
 ```
 
 ## Finding Your GitHub App Credentials
