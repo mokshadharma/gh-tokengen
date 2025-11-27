@@ -21,6 +21,12 @@ from urllib.parse import urlparse
 import base64
 import re
 import threading
+try:
+    from prompt_toolkit.validation import Validator
+except ImportError:
+    class Validator:  # type: ignore
+        pass
+
 
 __version__ = "1.0.0"
 
@@ -2181,6 +2187,74 @@ class KeyBindingHandlers:
 
         return kb
 
+class PromptInputValidator(Validator):
+    """Validator for prompt input based on current mode."""
+
+    def __init__(
+        self,
+        state: ValidationState,
+        enable_path_completion: bool,
+        no_path_completion: bool,
+        no_fuzzy: bool,
+        path_completion_validator: PathCompletionValidator,
+        no_path_completion_validator: NoPathCompletionValidator,
+        validation_error_class: type,
+        cwd: Path
+    ) -> None:
+        self.state = state
+        self.enable_path_completion = enable_path_completion
+        self.no_path_completion = no_path_completion
+        self.no_fuzzy = no_fuzzy
+        self.path_completion_validator = path_completion_validator
+        self.no_path_completion_validator = no_path_completion_validator
+        self.validation_error_class = validation_error_class
+        self.cwd = cwd
+
+    def _clear_error_state(self) -> None:
+        """Clear error message at the start of validation."""
+        self.state.error_message = ""
+
+    def _dispatch_validation_by_completion_mode(self, expanded_path: Path, text: str) -> None:
+        """Dispatch to appropriate validation handler based on completion mode."""
+        if self.no_path_completion:
+            self.no_path_completion_validator.validate(expanded_path, self.cwd)
+        else:
+            self.path_completion_validator.validate(text)
+
+    def _execute_path_validation_with_exception_handling(self, text: str) -> None:
+        """Execute path validation with proper exception handling."""
+        try:
+            expanded_path = expand_home_in_path(text)
+            self._dispatch_validation_by_completion_mode(expanded_path, text)
+        except self.validation_error_class:
+            raise
+        except Exception:
+            pass
+
+    def _check_if_path_validation_enabled(self) -> bool:
+        """Check if path validation is enabled in current mode."""
+        return check_if_path_mode_enabled(self.enable_path_completion, self.no_path_completion)
+
+    def _dispatch_validation_by_mode(self, text: str) -> None:
+        """Dispatch validation based on whether path validation is enabled."""
+        if self._check_if_path_validation_enabled():
+            self._execute_path_validation_with_exception_handling(text)
+
+    def _execute_validation_workflow(self, text: str) -> None:
+        """Execute the complete validation workflow based on mode."""
+        self._dispatch_validation_by_mode(text)
+
+    def _handle_empty_text_or_validate(self, text: str) -> None:
+        """Handle empty text case or proceed with validation."""
+        if check_if_text_is_empty(text):
+            return
+        self._execute_validation_workflow(text)
+
+    def validate(self, document: Any) -> None:
+        """Validate input according to current mode and configuration."""
+        text = document.text.strip()
+        self._clear_error_state()
+        self._handle_empty_text_or_validate(text)
 def prompt_for_input(
     prompt_text: str,
     enable_path_completion: bool = False,
@@ -2229,59 +2303,16 @@ def prompt_for_input(
         path_completion_validator = PathCompletionValidator(state, PTValidationError, no_fuzzy, Path(os.getcwd()))
         path_resolver = FuzzyPathResolver(Path(os.getcwd()), no_fuzzy, enable_path_completion)
 
-        # Helper functions for validation logic
-        def clear_error_state() -> None:
-            """Clear error message at the start of validation."""
-            state.error_message = ""
-
-
-
-
-        def dispatch_validation_by_completion_mode(expanded_path: Path, text: str) -> None:
-            """Dispatch to appropriate validation handler based on completion mode."""
-            if no_path_completion:
-                no_path_completion_validator.validate(expanded_path, Path(os.getcwd()))
-            else:
-                path_completion_validator.validate(text)
-
-        def execute_path_validation_with_exception_handling(text: str) -> None:
-            """Execute path validation with proper exception handling."""
-            try:
-                expanded_path = expand_home_in_path(text)
-                dispatch_validation_by_completion_mode(expanded_path, text)
-            except PTValidationError:
-                raise
-            except Exception:
-                pass
-
-        def check_if_path_validation_enabled() -> bool:
-            """Check if path validation is enabled in current mode."""
-            return check_if_path_mode_enabled(enable_path_completion, no_path_completion)
-
-        def dispatch_validation_by_mode(text: str) -> None:
-            """Dispatch validation based on whether path validation is enabled."""
-            if check_if_path_validation_enabled():
-                execute_path_validation_with_exception_handling(text)
-
-        def execute_validation_workflow(text: str) -> None:
-            """Execute the complete validation workflow based on mode."""
-            dispatch_validation_by_mode(text)
-
-        def handle_empty_text_or_validate(text: str) -> None:
-            """Handle empty text case or proceed with validation."""
-            if check_if_text_is_empty(text):
-                return
-            execute_validation_workflow(text)
-
-        # Validator for inputs
-        class InputValidator(Validator):
-            def validate(self, document: Any) -> None:
-                """Validate input according to current mode and configuration."""
-                text = document.text.strip()
-                clear_error_state()
-                handle_empty_text_or_validate(text)
-
-        validator = InputValidator()
+        validator = PromptInputValidator(
+            state,
+            enable_path_completion,
+            no_path_completion,
+            no_fuzzy,
+            path_completion_validator,
+            no_path_completion_validator,
+            PTValidationError,
+            Path(os.getcwd())
+        )
 
         # Custom key bindings
         enter_key_validator = EnterKeyValidator(
