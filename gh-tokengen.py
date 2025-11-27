@@ -1862,6 +1862,149 @@ def expand_home_variables(validation_path: str) -> str:
     return validation_path.replace('$HOME', str(Path.home()))
 
 
+def expand_tilde_in_path(path_str: str) -> Path:
+    """Expand tilde in path string to Path object."""
+    return Path(path_str).expanduser()
+
+def make_absolute_if_relative(path: Path, cwd: Path) -> Path:
+    """Make path absolute if it's relative."""
+    if not path.is_absolute():
+        return cwd / path
+    else:
+        return path
+
+def set_error_and_abort(message: str, state: ValidationState) -> None:
+    """Set error message in state (never returns normally)."""
+    state.error_message = message
+
+def check_path_exists_or_abort(path: Path) -> bool:
+    """Check if path exists, return True if exists, False if not."""
+    return path.exists()
+
+def check_path_is_directory_or_abort(path: Path) -> bool:
+    """Check if path is a directory, return True if directory, False if not."""
+    return path.is_dir()
+
+def check_path_is_pem_file(path: Path) -> bool:
+    """Check if path has .pem extension."""
+    return path.suffix.lower() == '.pem'
+
+def validate_path_exists_or_abort(path: Path, state: ValidationState) -> bool:
+    """Validate path exists, return False and set error if not."""
+    if not check_path_exists_or_abort(path):
+        set_error_and_abort("not a valid *.pem file name", state)
+        return False
+    return True
+
+def validate_path_not_directory_or_abort(path: Path, state: ValidationState) -> bool:
+    """Validate path is not a directory, return False and set error if it is."""
+    if check_path_is_directory_or_abort(path):
+        set_error_and_abort("this is a directory, not a *.pem file", state)
+        return False
+    return True
+
+def validate_path_is_pem_or_abort(path: Path, state: ValidationState) -> bool:
+    """Validate path is a .pem file, return False and set error if not."""
+    if not check_path_is_pem_file(path):
+        set_error_and_abort("not a valid *.pem file name", state)
+        return False
+    return True
+
+    enable_path_completion: bool = False,
+def perform_path_validation_checks(path: Path, state: ValidationState) -> bool:
+    """Perform all path validation checks, return False on any failure."""
+    return (validate_path_exists_or_abort(path, state) and
+           validate_path_not_directory_or_abort(path, state) and
+           validate_path_is_pem_or_abort(path, state))
+
+def validate_resolved_path_or_set_error(validation_path: str, state: ValidationState, cwd: Path) -> bool:
+    """Validate resolved path through all checks, return False on failure."""
+    try:
+        expanded = expand_home_variables(validation_path)
+        path = expand_tilde_in_path(expanded)
+        absolute_path = make_absolute_if_relative(path, cwd)
+        return perform_path_validation_checks(absolute_path, state)
+    except Exception:
+        set_error_and_abort("not a valid *.pem file name", state)
+        return False
+
+def handle_path_mode_validation(buf: Any, text: str, state: ValidationState, cwd: Path, no_path_completion: bool, path_resolver: FuzzyPathResolver) -> bool:
+    """Handle validation for path modes, return False if validation fails."""
+    if check_if_text_is_empty(text):
+        return False
+    validation_path = determine_validation_path_for_completion_mode(buf, text, no_path_completion, path_resolver)
+    return validate_resolved_path_or_set_error(validation_path, state, cwd)
+
+def extract_first_line_from_error(error: ValidationError) -> str:
+    """Extract first line from ValidationError message."""
+    return str(error).split('\n')[0]
+
+def validate_with_custom_validator_or_set_error(text: str, validator_func: Optional[Callable[[str], None]], state: ValidationState) -> bool:
+    """Validate using custom validator, return False if validation fails."""
+    if validator_func:
+        try:
+            validator_func(text)
+            return True
+        except ValidationError as e:
+            set_error_and_abort(extract_first_line_from_error(e), state)
+            return False
+    return True
+
+def handle_non_path_mode_validation(text: str, validator_func: Optional[Callable[[str], None]], state: ValidationState) -> bool:
+    """Handle validation for non-path modes, return False if validation fails."""
+    return validate_with_custom_validator_or_set_error(text, validator_func, state)
+
+    validator_func: Optional[Callable[[str], None]] = None,
+def perform_validation_by_mode(buf: Any, text: str, state: ValidationState, cwd: Path, enable_path_completion: bool, no_path_completion: bool, path_resolver: FuzzyPathResolver, validator_func: Optional[Callable[[str], None]]) -> bool:
+    """Perform validation based on current mode, return False if validation fails."""
+    if check_if_path_mode_enabled(enable_path_completion, no_path_completion):
+        return handle_path_mode_validation(buf, text, state, cwd, no_path_completion, path_resolver)
+    else:
+        return handle_non_path_mode_validation(text, validator_func, state)
+
+    no_fuzzy: bool = False,
+def accept_buffer_input(buf: Any) -> None:
+    """Accept the buffer input."""
+    buf.validate_and_handle()
+
+    no_path_completion: bool = False
+def validate_and_accept_if_valid(buf: Any, text: str, state: ValidationState, cwd: Path, enable_path_completion: bool, no_path_completion: bool, path_resolver: FuzzyPathResolver, validator_func: Optional[Callable[[str], None]]) -> None:
+    """Validate input and accept if valid."""
+    if perform_validation_by_mode(buf, text, state, cwd, enable_path_completion, no_path_completion, path_resolver, validator_func):
+        accept_buffer_input(buf)
+
+class EnterKeyValidator:
+    """Handles validation logic when user presses Enter."""
+
+    def __init__(
+        self,
+        state: ValidationState,
+        enable_path_completion: bool,
+        no_path_completion: bool,
+        path_resolver: FuzzyPathResolver,
+        validator_func: Optional[Callable[[str], None]],
+        cwd: Path
+    ) -> None:
+        self.state = state
+        self.enable_path_completion = enable_path_completion
+        self.no_path_completion = no_path_completion
+        self.path_resolver = path_resolver
+        self.validator_func = validator_func
+        self.cwd = cwd
+
+    def validate_and_accept(self, buf: Any, text: str) -> None:
+        """Validate input and accept if valid."""
+        validate_and_accept_if_valid(
+            buf,
+            text,
+            self.state,
+            self.cwd,
+            self.enable_path_completion,
+            self.no_path_completion,
+            self.path_resolver,
+            self.validator_func
+        )
+
 def prompt_for_input(
     prompt_text: str,
     enable_path_completion: bool = False,
@@ -1965,6 +2108,15 @@ def prompt_for_input(
         validator = InputValidator()
 
         # Custom key bindings
+        enter_key_validator = EnterKeyValidator(
+            state,
+            enable_path_completion,
+            no_path_completion,
+            path_resolver,
+            validator_func,
+            Path(os.getcwd())
+        )
+
         kb = KeyBindings()
 
         @kb.add(Keys.Backspace)
@@ -1998,6 +2150,19 @@ def prompt_for_input(
                     text_before = text_before[:-1]
 
                 new_pos = len(text_before)
+
+                # Save deleted text to yank buffer
+                deleted_text = buf.text[new_pos:pos]
+                if deleted_text:
+                    state.yank_buffer = deleted_text
+
+                buf.cursor_position = new_pos
+                buf.text = text_before + buf.text[pos:]
+
+                # Trigger completions if path completion is enabled
+                if enable_path_completion and not buf.complete_state:
+                    buf.start_completion(select_first=False)
+
 
                 # Save deleted text to yank buffer
                 deleted_text = buf.text[new_pos:pos]
@@ -2047,119 +2212,31 @@ def prompt_for_input(
 
 
 
-        def expand_tilde_in_path(path_str: str) -> Path:
-            """Expand tilde in path string to Path object."""
-            return Path(path_str).expanduser()
 
-        def make_absolute_if_relative(path: Path) -> Path:
-            """Make path absolute if it's relative."""
-            if not path.is_absolute():
-                return Path(os.getcwd()) / path
-            else:
-                return path
 
-        def set_error_and_abort(message: str) -> None:
-            """Set error message in state (never returns normally)."""
-            state.error_message = message
 
-        def check_path_exists_or_abort(path: Path) -> bool:
-            """Check if path exists, return True if exists, False if not."""
-            return path.exists()
 
-        def check_path_is_directory_or_abort(path: Path) -> bool:
-            """Check if path is a directory, return True if directory, False if not."""
-            return path.is_dir()
 
-        def check_path_is_pem_file(path: Path) -> bool:
-            """Check if path has .pem extension."""
-            return path.suffix.lower() == '.pem'
 
-        def validate_path_exists_or_abort(path: Path) -> bool:
-            """Validate path exists, return False and set error if not."""
-            if not check_path_exists_or_abort(path):
-                set_error_and_abort("not a valid *.pem file name")
+
+
+
                 return False
+
+            return validate_resolved_path_or_set_error(validation_path, state, Path(os.getcwd()))
+
+
             return True
 
-        def validate_path_not_directory_or_abort(path: Path) -> bool:
-            """Validate path is not a directory, return False and set error if it is."""
-            if check_path_is_directory_or_abort(path):
-                set_error_and_abort("this is a directory, not a *.pem file")
-                return False
-            return True
 
-        def validate_path_is_pem_or_abort(path: Path) -> bool:
-            """Validate path is a .pem file, return False and set error if not."""
-            if not check_path_is_pem_file(path):
-                set_error_and_abort("not a valid *.pem file name")
-                return False
-            return True
 
-        def perform_path_validation_checks(path: Path) -> bool:
-            """Perform all path validation checks, return False on any failure."""
-            return (validate_path_exists_or_abort(path) and
-                   validate_path_not_directory_or_abort(path) and
-                   validate_path_is_pem_or_abort(path))
-
-        def validate_resolved_path_or_set_error(validation_path: str) -> bool:
-            """Validate resolved path through all checks, return False on failure."""
-            try:
-                expanded = expand_home_variables(validation_path)
-                path = expand_tilde_in_path(expanded)
-                absolute_path = make_absolute_if_relative(path)
-                return perform_path_validation_checks(absolute_path)
-            except Exception:
-                set_error_and_abort("not a valid *.pem file name")
-                return False
-
-        def handle_path_mode_validation(buf: Any, text: str) -> bool:
-            """Handle validation for path modes, return False if validation fails."""
-            if check_if_text_is_empty(text):
-                return False
-            validation_path = determine_validation_path_for_completion_mode(buf, text, no_path_completion, path_resolver)
-            return validate_resolved_path_or_set_error(validation_path)
-
-        def extract_first_line_from_error(error: ValidationError) -> str:
-            """Extract first line from ValidationError message."""
-            return str(error).split('\n')[0]
-
-        def validate_with_custom_validator_or_set_error(text: str) -> bool:
-            """Validate using custom validator, return False if validation fails."""
-            if validator_func:
-                try:
-                    validator_func(text)
-                    return True
-                except ValidationError as e:
-                    set_error_and_abort(extract_first_line_from_error(e))
-                    return False
-            return True
-
-        def handle_non_path_mode_validation(text: str) -> bool:
-            """Handle validation for non-path modes, return False if validation fails."""
-            return validate_with_custom_validator_or_set_error(text)
-
-        def perform_validation_by_mode(buf: Any, text: str) -> bool:
-            """Perform validation based on current mode, return False if validation fails."""
-            if check_if_path_mode_enabled(enable_path_completion, no_path_completion):
-                return handle_path_mode_validation(buf, text)
-            else:
-                return handle_non_path_mode_validation(text)
-
-        def accept_buffer_input(buf: Any) -> None:
-            """Accept the buffer input."""
-            buf.validate_and_handle()
-
-        def validate_and_accept_if_valid(buf: Any, text: str) -> None:
-            """Validate input and accept if valid."""
-            if perform_validation_by_mode(buf, text):
-                accept_buffer_input(buf)
 
         @kb.add(Keys.ControlM)  # Enter key
         def handle_enter(event: Any) -> None:
             """Handle Enter key - validate before accepting."""
             buf = event.app.current_buffer
             text = buf.text.strip()
-            validate_and_accept_if_valid(buf, text)
+            enter_key_validator.validate_and_accept(buf, text)
 
         def check_if_should_flash_error(buf: Any) -> bool:
             """Check if error should be flashed."""
