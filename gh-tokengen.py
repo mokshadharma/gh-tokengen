@@ -1523,6 +1523,123 @@ def navigate_through_directory_parts(base_dir: Path, parts: List[str], no_fuzzy:
     return current_dir
 
 
+class PathCompletionValidator:
+    """Validator for paths when path completion is enabled."""
+
+    def __init__(self, state: ValidationState, validation_error_class: type, no_fuzzy: bool, cwd: Path) -> None:
+        """
+        Initialize the validator.
+
+        Args:
+            state: Validation state for error messages
+            validation_error_class: The exception class to raise on validation failure
+            no_fuzzy: Whether to use fuzzy matching
+            cwd: Current working directory
+        """
+        self.state = state
+        self.validation_error_class = validation_error_class
+        self.no_fuzzy = no_fuzzy
+        self.cwd = cwd
+
+    def validate(self, text: str) -> None:
+        """
+        Validate path text.
+
+        Args:
+            text: The path text to validate
+        """
+        base_dir = determine_base_directory_for_text(text, self.cwd)
+        self._dispatch_path_validation_by_structure(text, base_dir)
+
+    def _parse_path_components(self, text: str) -> Tuple[List[str], str]:
+        """Parse path into directory parts and final query segment."""
+        parts = text.split('/')
+        return parts[:-1], parts[-1]
+
+    def _validate_directory_exists_or_fail(self, directory: Path) -> None:
+        """Validate that directory exists, raise error if not."""
+        if not directory.exists() or not directory.is_dir():
+            raise_validation_error_with_state(f"directory '{directory}' does not exist", self.state, self.validation_error_class)
+
+    def _get_path_validation_candidates_or_fail(self, directory: Path) -> List[Path]:
+        """Get validation candidates (dirs and .pem files), raise if directory access fails."""
+        try:
+            return [p for p in directory.iterdir() if p.is_dir() or (p.is_file() and p.suffix.lower() == '.pem')]
+        except PermissionError:
+            raise_validation_error_with_state(f"permission denied accessing '{directory}'", self.state, self.validation_error_class)
+        except Exception:
+            return []
+
+    def _validate_candidates_not_empty_or_fail(self, candidates: List[Path]) -> None:
+        """Validate that candidates list is not empty."""
+        if not candidates:
+            raise_validation_error_with_state("no matches found", self.state, self.validation_error_class)
+
+    def _validate_query_has_match_or_fail(self, query: str, candidates: List[Path]) -> None:
+        """Validate that query matches at least one candidate."""
+        matches = apply_matching_strategy(query, candidates, self.no_fuzzy)
+        if not matches:
+            raise_validation_error_with_state("no matches found", self.state, self.validation_error_class)
+
+    def _validate_final_query_segment(self, final_query: str, current_dir: Path) -> None:
+        """Validate final query segment."""
+        self._validate_directory_exists_or_fail(current_dir)
+        candidates = self._get_path_validation_candidates_or_fail(current_dir)
+        self._validate_query_has_match_or_fail(final_query, candidates)
+
+    def _validate_final_query_if_present(self, final_query: str, current_dir: Path) -> None:
+        """Validate final query segment if it's not empty."""
+        if final_query:
+            self._validate_final_query_segment(final_query, current_dir)
+
+    def _navigate_segment_with_validation(self, i: int, part: str, current_dir: Path) -> Path:
+        """Navigate one segment with validation."""
+        if check_skip_directory_part(i, part):
+            return current_dir
+
+        self._validate_directory_exists_or_fail(current_dir)
+        subdirs = get_subdirectories_from_path(current_dir)
+        matched = resolve_directory_segment(subdirs, part, self.no_fuzzy)
+
+        if not matched:
+
+            raise_validation_error_with_state(f"directory '{part}' not found", self.state, self.validation_error_class)
+
+        return matched
+
+    def _validate_multi_segment_path(self, text: str, base_dir: Path) -> None:
+        """Validate a path containing directory separators."""
+        dir_parts, final_query = self._parse_path_components(text)
+        current_dir = base_dir
+        for i, part in enumerate(dir_parts):
+            current_dir = self._navigate_segment_with_validation(i, part, current_dir)
+        self._validate_final_query_if_present(final_query, current_dir)
+
+    def _check_if_special_home_marker(self, text: str) -> bool:
+        """Check if text is a special home directory marker."""
+        return text in ('~', '$HOME')
+
+    def _validate_non_special_single_segment(self, text: str, base_dir: Path) -> None:
+        """Validate single segment path that is not a special marker."""
+        self._validate_directory_exists_or_fail(base_dir)
+        candidates = self._get_path_validation_candidates_or_fail(base_dir)
+        self._validate_candidates_not_empty_or_fail(candidates)
+        self._validate_query_has_match_or_fail(text, candidates)
+
+    def _validate_single_segment_path(self, text: str, base_dir: Path) -> None:
+        """Validate a simple path with no directory separators."""
+        if self._check_if_special_home_marker(text):
+            return
+        self._validate_non_special_single_segment(text, base_dir)
+
+    def _dispatch_path_validation_by_structure(self, text: str, base_dir: Path) -> None:
+        """Dispatch to appropriate validation based on path structure."""
+        if '/' in text:
+            self._validate_multi_segment_path(text, base_dir)
+        else:
+            self._validate_single_segment_path(text, base_dir)
+
+
 def prompt_for_input(
     prompt_text: str,
     enable_path_completion: bool = False,
@@ -1568,6 +1685,7 @@ def prompt_for_input(
         bottom_toolbar = create_bottom_toolbar_func(state, HTML)
 
         no_path_completion_validator = NoPathCompletionValidator(state, PTValidationError)
+        path_completion_validator = PathCompletionValidator(state, PTValidationError, no_fuzzy, Path(os.getcwd()))
 
         # Helper functions for validation logic
         def clear_error_state() -> None:
@@ -1578,59 +1696,12 @@ def prompt_for_input(
             """Check if text is empty (validation should be skipped)."""
             return not text
 
-        def parse_path_components(text: str) -> Tuple[List[str], str]:
-            """Parse path into directory parts and final query segment."""
-            parts = text.split('/')
-            return parts[:-1], parts[-1]
-
-        def validate_final_query_if_present(final_query: str, current_dir: Path) -> None:
-            """Validate final query segment if it's not empty."""
-            if final_query:
-                validate_final_query_segment(final_query, current_dir, no_fuzzy, state, PTValidationError)
-
-        def validate_multi_segment_path(text: str, base_dir: Path) -> None:
-            """Validate a path containing directory separators."""
-            dir_parts, final_query = parse_path_components(text)
-            current_dir = base_dir
-            for i, part in enumerate(dir_parts):
-                current_dir = navigate_segment_with_validation(i, part, current_dir, final_query)
-            validate_final_query_if_present(final_query, current_dir)
-
-        def check_if_special_home_marker(text: str) -> bool:
-            """Check if text is a special home directory marker."""
-            return text in ('~', '$HOME')
-
-        def validate_non_special_single_segment(text: str, base_dir: Path) -> None:
-            """Validate single segment path that is not a special marker."""
-            validate_directory_exists_or_fail(base_dir, state, PTValidationError)
-            candidates = get_path_validation_candidates_or_fail(base_dir, state, PTValidationError)
-            validate_candidates_not_empty_or_fail(candidates, state, PTValidationError)
-            validate_query_has_match_or_fail(text, candidates, no_fuzzy, state, PTValidationError)
-
-        def validate_single_segment_path(text: str, base_dir: Path) -> None:
-            """Validate a simple path with no directory separators."""
-            if check_if_special_home_marker(text):
-                return
-            validate_non_special_single_segment(text, base_dir)
-
-        def dispatch_path_validation_by_structure(text: str, base_dir: Path) -> None:
-            """Dispatch to appropriate validation based on path structure."""
-            if '/' in text:
-                validate_multi_segment_path(text, base_dir)
-            else:
-                validate_single_segment_path(text, base_dir)
-
-        def perform_path_completion_validation(text: str) -> None:
-            """Complete validation workflow for path completion mode."""
-            base_dir = determine_base_directory_for_text(text, Path(os.getcwd()))
-            dispatch_path_validation_by_structure(text, base_dir)
-
         def dispatch_validation_by_completion_mode(expanded_path: Path, text: str) -> None:
             """Dispatch to appropriate validation handler based on completion mode."""
             if no_path_completion:
                 no_path_completion_validator.validate(expanded_path, Path(os.getcwd()))
             else:
-                perform_path_completion_validation(text)
+                path_completion_validator.validate(text)
 
         def execute_path_validation_with_exception_handling(text: str) -> None:
             """Execute path validation with proper exception handling."""
