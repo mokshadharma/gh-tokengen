@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List, Optional, Tuple, Callable, Any
+from typing import List, Optional, Tuple, Callable
 from rapidfuzz import fuzz, process
 
 def make_path_absolute_from_cwd(path: Path, cwd: Path) -> Path:

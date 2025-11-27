@@ -1,7 +1,7 @@
 from __future__ import annotations
 import threading
 import time
-from typing import Optional, Callable, Any, NoReturn, TYPE_CHECKING, cast
+from typing import Optional, Callable, NoReturn, TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from prompt_toolkit.formatted_text import HTML

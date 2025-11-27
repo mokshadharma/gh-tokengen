@@ -1,14 +1,22 @@
 from __future__ import annotations
 import re
+from types import ModuleType
 from pathlib import Path
-from typing import List, Tuple, Union, Optional, Any, Iterator, Dict, TYPE_CHECKING, cast
+from typing import List, Tuple, Union, Optional, Any, Iterator, Dict, TYPE_CHECKING, cast, AsyncGenerator
 from gh_tokengen.utils import natural_sort_key
 
+try:
+    from prompt_toolkit.completion import Completer
+except ImportError:
+    Completer = object # type: ignore
+
 if TYPE_CHECKING:
+    from prompt_toolkit.completion import Completion
+    from prompt_toolkit.enums import EditingMode
     from prompt_toolkit.document import Document
     from prompt_toolkit.completion import CompleteEvent
 
-class FuzzyPemCompleter:
+class FuzzyPemCompleter(Completer):
     """
     Custom completer for PEM file selection with fuzzy matching.
 
@@ -29,8 +37,8 @@ class FuzzyPemCompleter:
         self.base_dir: Path = base_dir
         self.no_fuzzy: bool = no_fuzzy
         from rapidfuzz import fuzz, process
-        self.fuzz: Any = fuzz
-        self.process: Any = process
+        self.fuzz: ModuleType = fuzz
+        self.process: ModuleType = process
         # Sentinel values for flow control without exposing conditionals
         self._EMPTY_RESULT: List[Tuple[str, float, Path]] = []
         self._NO_EARLY_EXIT = object()
@@ -70,7 +78,7 @@ class FuzzyPemCompleter:
         """Check if query is empty."""
         return not query
 
-    def _handle_empty_query_or_continue(self, query: str) -> Union[List[Tuple[str, float, Path]], Any]:
+    def _handle_empty_query_or_continue(self, query: str) -> Union[List[Tuple[str, float, Path]], object]:
         """Return empty list for empty query, sentinel to continue otherwise."""
         return self._EMPTY_RESULT if self._check_query_empty(query) else self._NO_EARLY_EXIT
 
@@ -98,7 +106,7 @@ class FuzzyPemCompleter:
         """Check if matches list is empty."""
         return not matches
 
-    def _handle_no_matches_or_continue(self, matches: List[Path]) -> Union[List[Tuple[str, float, Path]], Any]:
+    def _handle_no_matches_or_continue(self, matches: List[Path]) -> Union[List[Tuple[str, float, Path]], object]:
         """Return empty list if no matches, sentinel to continue otherwise."""
         return self._EMPTY_RESULT if self._check_matches_empty(matches) else self._NO_EARLY_EXIT
 
@@ -109,7 +117,9 @@ class FuzzyPemCompleter:
     def _perform_prefix_matching_workflow(self, matches: List[Path]) -> List[Tuple[str, float, Path]]:
         """Execute prefix matching workflow: check for no matches then score."""
         no_matches_result = self._handle_no_matches_or_continue(matches)
-        return no_matches_result if no_matches_result is not self._NO_EARLY_EXIT else self._score_prefix_matches(matches)
+        if no_matches_result is not self._NO_EARLY_EXIT:
+            return cast(List[Tuple[str, float, Path]], no_matches_result)
+        return self._score_prefix_matches(matches)
 
     def _perform_prefix_matching(self, query: str, candidates: List[Path]) -> List[Tuple[str, float, Path]]:
         """Complete prefix matching workflow with internal decision-making."""
@@ -170,7 +180,9 @@ class FuzzyPemCompleter:
     def _perform_fuzzy_matching_workflow(self, valid_candidates: List[Path], query: str) -> List[Tuple[str, float, Path]]:
         """Execute fuzzy matching workflow: check for no matches then score."""
         no_matches_result = self._handle_no_matches_or_continue(valid_candidates)
-        return no_matches_result if no_matches_result is not self._NO_EARLY_EXIT else self._continue_with_fuzzy_scoring(valid_candidates, query)
+        if no_matches_result is not self._NO_EARLY_EXIT:
+            return cast(List[Tuple[str, float, Path]], no_matches_result)
+        return self._continue_with_fuzzy_scoring(valid_candidates, query)
 
     def _perform_fuzzy_matching(self, query: str, candidates: List[Path]) -> List[Tuple[str, float, Path]]:
         """Complete fuzzy matching workflow with internal decision-making."""
@@ -211,9 +223,11 @@ class FuzzyPemCompleter:
         matching_results: List[Tuple[str, float, Path]] = self._select_matching_strategy(query, candidates)
         return self._organize_and_sort_results(matching_results)
 
-    def _dispatch_to_matching_or_return_early(self, empty_query_result: Union[List[Tuple[str, float, Path]], Any], query: str, candidates: List[Path]) -> List[Tuple[str, float, Path]]:
+    def _dispatch_to_matching_or_return_early(self, empty_query_result: Union[List[Tuple[str, float, Path]], object], query: str, candidates: List[Path]) -> List[Tuple[str, float, Path]]:
         """Dispatch to matching workflow or return early exit result (decision made internally)."""
-        return empty_query_result if empty_query_result is not self._NO_EARLY_EXIT else self._continue_with_matching(query, candidates)
+        if empty_query_result is not self._NO_EARLY_EXIT:
+            return cast(List[Tuple[str, float, Path]], empty_query_result)
+        return self._continue_with_matching(query, candidates)
 
     def _fuzzy_match(self, query: str, candidates: List[Path]) -> List[Tuple[str, float, Path]]:
         """
@@ -288,7 +302,7 @@ class FuzzyPemCompleter:
         """Sort paths list in-place by natural sort order."""
         paths.sort(key=lambda p: natural_sort_key(p.name))
 
-    def _create_completion_for_path(self, path: Path, start_position: int, Completion: Any) -> Any:
+    def _create_completion_for_path(self, path: Path, start_position: int, Completion: type[Completion]) -> Completion:
         """Create a Completion object for a path (handles directory vs file logic internally)."""
         completion_text: str
         if path.is_dir():
@@ -302,12 +316,12 @@ class FuzzyPemCompleter:
             display=completion_text
         )
 
-    def _yield_completions_for_paths(self, paths: List[Path], start_position: int, Completion: Any) -> Iterator[Any]:
+    def _yield_completions_for_paths(self, paths: List[Path], start_position: int, Completion: type[Completion]) -> Iterator[Completion]:
         """Yield completions for a list of paths."""
         for path in paths:
             yield self._create_completion_for_path(path, start_position, Completion)
 
-    def _yield_empty_query_completions(self, candidates: List[Path], Completion: Any) -> Iterator[Any]:
+    def _yield_empty_query_completions(self, candidates: List[Path], Completion: type[Completion]) -> Iterator[Completion]:
         """Handle completions when query is empty (path ends with /)."""
         pem_files, directories = self._separate_pem_and_directories(candidates)
         self._sort_by_natural_order(pem_files)
@@ -316,21 +330,21 @@ class FuzzyPemCompleter:
         yield from self._yield_completions_for_paths(pem_files, 0, Completion)
         yield from self._yield_completions_for_paths(directories, 0, Completion)
 
-    def _yield_fuzzy_query_completions(self, final_query: str, candidates: List[Path], Completion: Any) -> Iterator[Any]:
+    def _yield_fuzzy_query_completions(self, final_query: str, candidates: List[Path], Completion: type[Completion]) -> Iterator[Completion]:
         """Handle completions when query is non-empty (fuzzy matching)."""
         fuzzy_matches: List[Tuple[str, float, Path]] = self._fuzzy_match(final_query, candidates)
 
         for name, score, path in fuzzy_matches:
             yield self._create_completion_for_path(path, -len(final_query), Completion)
 
-    def _dispatch_query_completions(self, final_query: str, candidates: List[Path], Completion: Any) -> Iterator[Any]:
+    def _dispatch_query_completions(self, final_query: str, candidates: List[Path], Completion: type[Completion]) -> Iterator[Completion]:
         """Dispatch to appropriate completion strategy based on query emptiness."""
         if not final_query:
             yield from self._yield_empty_query_completions(candidates, Completion)
         else:
             yield from self._yield_fuzzy_query_completions(final_query, candidates, Completion)
 
-    def _handle_slash_path_completions(self, text: str, Completion: Any) -> Iterator[Any]:
+    def _handle_slash_path_completions(self, text: str, Completion: type[Completion]) -> Iterator[Completion]:
         """Handle completions for paths containing slashes."""
         parts: List[str] = text.split('/')
         final_query: str = parts[-1]
@@ -353,7 +367,7 @@ class FuzzyPemCompleter:
             return True
         return False
 
-    def _handle_non_slash_path_completions(self, text: str, Completion: Any) -> Iterator[Any]:
+    def _handle_non_slash_path_completions(self, text: str, Completion: type[Completion]) -> Iterator[Completion]:
         """Handle completions for paths without slashes."""
         if self._should_block_tilde_completion(text):
             return
@@ -364,14 +378,14 @@ class FuzzyPemCompleter:
         for name, score, path in matches:
             yield self._create_completion_for_path(path, -len(text), Completion)
 
-    def _dispatch_completions_by_path_type(self, text: str, Completion: Any) -> Iterator[Any]:
+    def _dispatch_completions_by_path_type(self, text: str, Completion: type[Completion]) -> Iterator[Completion]:
         """Dispatch to appropriate completion handler based on path type (slash vs non-slash)."""
         if '/' in text:
             yield from self._handle_slash_path_completions(text, Completion)
         else:
             yield from self._handle_non_slash_path_completions(text, Completion)
 
-    def get_completions(self, document: Document, complete_event: CompleteEvent) -> Iterator[Any]:
+    def get_completions(self, document: Document, complete_event: CompleteEvent) -> Iterator[Completion]:
         """
         Generate completions for the current document state.
 
@@ -387,7 +401,7 @@ class FuzzyPemCompleter:
         text: str = document.text_before_cursor
         yield from self._dispatch_completions_by_path_type(text, Completion)
 
-    async def get_completions_async(self, document: Document, complete_event: CompleteEvent) -> Any:
+    async def get_completions_async(self, document: Document, complete_event: CompleteEvent) -> AsyncGenerator[Completion, None]:
         """
         Async version of get_completions required by prompt_toolkit.
 
@@ -492,7 +506,7 @@ def normalize_completion_flags(no_path_completion: bool, no_fuzzy: bool, enable_
     return no_fuzzy, enable_path_completion
 
 
-def select_editing_mode_by_string(mode_str: str, EditingMode: Any) -> Any:
+def select_editing_mode_by_string(mode_str: str, EditingMode: type[EditingMode]) -> EditingMode:
     """Select editing mode enum value based on string."""
     if mode_str == 'vi':
         return EditingMode.VI
@@ -500,7 +514,7 @@ def select_editing_mode_by_string(mode_str: str, EditingMode: Any) -> Any:
         return EditingMode.EMACS
 
 
-def create_completer_for_path_mode(enable_path_completion: bool, no_fuzzy: bool) -> Optional[Any]:
+def create_completer_for_path_mode(enable_path_completion: bool, no_fuzzy: bool) -> Optional[FuzzyPemCompleter]:
     """Create completer based on path completion mode."""
     if enable_path_completion:
         base_dir = Path.cwd()

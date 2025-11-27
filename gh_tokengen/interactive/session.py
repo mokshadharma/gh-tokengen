@@ -6,12 +6,23 @@ from gh_tokengen.utils import eprint, fatal_error
 from gh_tokengen.interactive.ui import ValidationState, ErrorFlashController
 from gh_tokengen.interactive.validators import EnterKeyValidator
 from gh_tokengen.interactive.completer import detect_editing_mode_from_inputrc, select_editing_mode_by_string
+from prompt_toolkit.completion import CompleteEvent
+from gh_tokengen.interactive.completer import FuzzyPemCompleter
 
 if TYPE_CHECKING:
+    from prompt_toolkit.buffer import Buffer
     from prompt_toolkit.key_binding import KeyPressEvent
+    from prompt_toolkit.shortcuts import PromptSession
+    from prompt_toolkit.completion import Completer
+    from prompt_toolkit.validation import Validator
+    from prompt_toolkit.output import Output
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.enums import EditingMode
+    from prompt_toolkit.keys import Keys
+    from prompt_toolkit.selection import SelectionType, SelectionState
 
 
-def select_validator_for_mode(enable_path_completion: bool, validator: Any) -> Optional[Any]:
+def select_validator_for_mode(enable_path_completion: bool, validator: Validator) -> Optional[Validator]:
     """Select validator based on path completion mode."""
     if enable_path_completion:
         return validator
@@ -19,7 +30,7 @@ def select_validator_for_mode(enable_path_completion: bool, validator: Any) -> O
         return None
 
 
-def select_toolbar_for_modes(enable_path_completion: bool, no_path_completion: bool, validator_func: Optional[Any], bottom_toolbar: Callable[[], Any]) -> Optional[Callable[[], Any]]:
+def select_toolbar_for_modes(enable_path_completion: bool, no_path_completion: bool, validator_func: Optional[Callable[[str], None]], bottom_toolbar: Callable[[], Any]) -> Optional[Callable[[], Any]]:
     """Select toolbar function based on validation modes."""
     if enable_path_completion or no_path_completion or validator_func:
         return bottom_toolbar
@@ -27,23 +38,23 @@ def select_toolbar_for_modes(enable_path_completion: bool, no_path_completion: b
         return None
 
 
-def attach_no_path_completion_handler(session: Any, state: Any) -> None:
+def attach_no_path_completion_handler(session: PromptSession[str], state: ValidationState) -> None:
     """Attach text change handler for no_path_completion mode."""
-    def on_text_changed(_: Any) -> None:
+    def on_text_changed(_: Buffer) -> None:
         state.error_message = ""
     session.default_buffer.on_text_changed += on_text_changed
 
 
-def attach_auto_expansion_handler(session: Any, completer: Any) -> None:
+def attach_auto_expansion_handler(session: PromptSession[str], completer: Completer) -> None:
     """Attach auto-expansion handler for path completion."""
-    def on_text_changed(_: Any) -> None:
+    def on_text_changed(_: Buffer) -> None:
         buf = session.default_buffer
         text = buf.text
         if buf.complete_state:
             return
         if text and not text.endswith('/') and '/' not in text[:-1] and text not in ('~', '$HOME'):
             try:
-                completions = list(completer.get_completions(buf.document, None))
+                completions = list(completer.get_completions(buf.document, CompleteEvent(text_inserted=False, completion_requested=True)))
                 if len(completions) == 1:
                     completion = completions[0]
                     if completion.text.endswith('/'):
@@ -54,7 +65,7 @@ def attach_auto_expansion_handler(session: Any, completer: Any) -> None:
     session.default_buffer.on_text_changed += on_text_changed
 
 
-def attach_text_handlers_for_modes(session: Any, no_path_completion: bool, enable_path_completion: bool, completer: Optional[Any], state: Any) -> None:
+def attach_text_handlers_for_modes(session: PromptSession[str], no_path_completion: bool, enable_path_completion: bool, completer: Optional[Completer], state: ValidationState) -> None:
     """Attach appropriate text change handlers based on modes."""
     if no_path_completion:
         attach_no_path_completion_handler(session, state)
@@ -62,7 +73,7 @@ def attach_text_handlers_for_modes(session: Any, no_path_completion: bool, enabl
         attach_auto_expansion_handler(session, completer)
 
 
-def prompt_with_session(session: Any) -> str:
+def prompt_with_session(session: PromptSession[str]) -> str:
     """Prompt user with session and return stripped result."""
     result = session.prompt()
     return result.strip()
@@ -131,11 +142,11 @@ class KeyBindingHandlers:
         enable_path_completion: bool,
         enter_key_validator: EnterKeyValidator,
         flash_controller: ErrorFlashController,
-        KeyBindings: type,
-        Keys: Any,
-            SelectionType: Any,
-            SelectionState: Any,
-            completer: Optional[Any] = None,
+        KeyBindings: type[KeyBindings],
+        Keys: type[Keys],
+            SelectionType: type[SelectionType],
+            SelectionState: type[SelectionState],
+            completer: Optional[Completer] = None,
     ) -> None:
         self.state = state
         self.enable_path_completion = enable_path_completion
@@ -147,7 +158,7 @@ class KeyBindingHandlers:
         self.SelectionState = SelectionState
         self.SelectionType = SelectionType
 
-    def create_key_bindings(self) -> Any:
+    def create_key_bindings(self) -> KeyBindings:
         """Create and return configured key bindings."""
         kb = self.KeyBindings()
 
@@ -249,7 +260,7 @@ class KeyBindingHandlers:
             else:
                 buf.insert_text('/')
                 # Auto-expand if unique directory
-                if self.enable_path_completion and self.completer:
+                if self.enable_path_completion and self.completer and isinstance(self.completer, FuzzyPemCompleter):
                     expanded = self.completer.expand_path_if_unique(buf.text)
                     if expanded:
                         buf.text = expanded
@@ -288,12 +299,12 @@ class PromptSessionFactory:
         no_path_completion: bool,
         validator_func: Optional[Callable[[str], None]],
         state: ValidationState,
-        PromptSession: Any,
-        EditingMode: Any,
-        completer: Optional[Any],
-        output: Any,
-        validator: Any,
-        key_bindings: Any,
+        PromptSession: type[PromptSession[str]],
+        EditingMode: type[EditingMode],
+        completer: Optional[Completer],
+        output: Output,
+        validator: Validator,
+        key_bindings: KeyBindings,
         bottom_toolbar: Callable[[], Any]
     ) -> None:
         self.prompt_text = prompt_text
@@ -309,7 +320,7 @@ class PromptSessionFactory:
         self.key_bindings = key_bindings
         self.bottom_toolbar = bottom_toolbar
 
-    def create_session(self) -> Any:
+    def create_session(self) -> PromptSession[str]:
         """Create and return a configured PromptSession."""
         mode_str = detect_editing_mode_from_inputrc()
         editing_mode = select_editing_mode_by_string(mode_str, self.EditingMode)
