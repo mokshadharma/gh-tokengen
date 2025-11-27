@@ -66,7 +66,7 @@ def generate_jwt(
             debug_print("JWT generated successfully", debug)
             debug_print(f"JWT issued at: {datetime.fromtimestamp(payload['iat'], tz=timezone.utc)}", debug)
             debug_print(f"JWT expires at: {exp_time}", debug)
-            debug_print(f"JWT preview: {token[:20]}...{token[-20:]}", debug)
+            debug_print(f"JWT: {token}", debug)
 
         return token, int(payload['iat']), int(payload['exp'])
 
