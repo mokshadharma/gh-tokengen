@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, Optional, Callable, List, Tuple
+from typing import Any, Optional, Callable, List, Tuple, Type
 try:
     from prompt_toolkit.validation import Validator
 except ImportError:
@@ -382,7 +382,7 @@ class PromptInputValidator(Validator):
         no_fuzzy: bool,
         path_completion_validator: PathCompletionValidator,
         no_path_completion_validator: NoPathCompletionValidator,
-        validation_error_class: type,
+        validation_error_class: Type[BaseException],
         cwd: Path
     ) -> None:
         self.state = state

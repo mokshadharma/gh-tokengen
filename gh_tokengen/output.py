@@ -20,6 +20,7 @@ def format_headers_for_display(headers: Dict[str, str]) -> str:
             if len(parts) == 2:
                 value = f"{parts[0]} {mask_token(parts[1])}"
         lines.append(f"  {key}: {value}")
+    return "\n".join(lines)
 def format_expiration(
     expires_at: str,
     format_type: str
