@@ -1820,6 +1820,47 @@ def check_if_text_is_empty(text: str) -> bool:
     """Check if text is empty (validation should be skipped)."""
     return not text
 
+def update_buffer_with_resolved_path(buf: Any, unexpanded_path: str) -> None:
+    """Update buffer text and cursor position with resolved path."""
+    buf.text = unexpanded_path
+    buf.cursor_position = len(unexpanded_path)
+
+
+def get_expanded_path_from_result(result: Tuple[str, str]) -> Tuple[str, str]:
+    """Extract unexpanded and expanded paths from resolution result."""
+    unexpanded_path, expanded_path = result
+    return unexpanded_path, expanded_path
+
+
+def resolve_and_update_buffer_or_use_text(buf: Any, text: str, path_resolver: FuzzyPathResolver) -> Tuple[str, str]:
+    """Resolve fuzzy path and update buffer, or return original text."""
+    result = path_resolver.resolve(text)
+    if result:
+        unexpanded_path, expanded_path = get_expanded_path_from_result(result)
+        update_buffer_with_resolved_path(buf, unexpanded_path)
+        return unexpanded_path, expanded_path
+    else:
+        return text, text
+
+
+def select_validation_path_for_no_completion(text: str) -> str:
+    """Return validation path for no_path_completion mode."""
+    return text
+
+
+def determine_validation_path_for_completion_mode(buf: Any, text: str, no_path_completion: bool, path_resolver: FuzzyPathResolver) -> str:
+    """Determine validation path based on completion mode."""
+    if no_path_completion:
+        return select_validation_path_for_no_completion(text)
+    else:
+        _, validation_path = resolve_and_update_buffer_or_use_text(buf, text, path_resolver)
+        return validation_path
+
+
+def expand_home_variables(validation_path: str) -> str:
+    """Expand $HOME variable in path string."""
+    return validation_path.replace('$HOME', str(Path.home()))
+
 
 def prompt_for_input(
     prompt_text: str,
@@ -1874,19 +1915,8 @@ def prompt_for_input(
             """Clear error message at the start of validation."""
             state.error_message = ""
 
-        def select_validation_path_for_no_completion(text: str) -> str:
-            """Return validation path for no_path_completion mode."""
-            return text
 
-        def update_buffer_with_resolved_path(buf: Any, unexpanded_path: str) -> None:
-            """Update buffer text and cursor position with resolved path."""
-            buf.text = unexpanded_path
-            buf.cursor_position = len(unexpanded_path)
 
-        def get_expanded_path_from_result(result: Tuple[str, str]) -> Tuple[str, str]:
-            """Extract unexpanded and expanded paths from resolution result."""
-            unexpanded_path, expanded_path = result
-            return unexpanded_path, expanded_path
 
         def dispatch_validation_by_completion_mode(expanded_path: Path, text: str) -> None:
             """Dispatch to appropriate validation handler based on completion mode."""
@@ -2014,27 +2044,8 @@ def prompt_for_input(
                     buf.start_completion(select_first=False)
 
 
-        def resolve_and_update_buffer_or_use_text(buf: Any, text: str) -> Tuple[str, str]:
-            """Resolve fuzzy path and update buffer, or return original text."""
-            result = path_resolver.resolve(text)
-            if result:
-                unexpanded_path, expanded_path = get_expanded_path_from_result(result)
-                update_buffer_with_resolved_path(buf, unexpanded_path)
-                return unexpanded_path, expanded_path
-            else:
-                return text, text
 
-        def determine_validation_path_for_completion_mode(buf: Any, text: str) -> str:
-            """Determine validation path based on completion mode."""
-            if no_path_completion:
-                return select_validation_path_for_no_completion(text)
-            else:
-                _, validation_path = resolve_and_update_buffer_or_use_text(buf, text)
-                return validation_path
 
-        def expand_home_variables(validation_path: str) -> str:
-            """Expand $HOME variable in path string."""
-            return validation_path.replace('$HOME', str(Path.home()))
 
         def expand_tilde_in_path(path_str: str) -> Path:
             """Expand tilde in path string to Path object."""
@@ -2105,7 +2116,7 @@ def prompt_for_input(
             """Handle validation for path modes, return False if validation fails."""
             if check_if_text_is_empty(text):
                 return False
-            validation_path = determine_validation_path_for_completion_mode(buf, text)
+            validation_path = determine_validation_path_for_completion_mode(buf, text, no_path_completion, path_resolver)
             return validate_resolved_path_or_set_error(validation_path)
 
         def extract_first_line_from_error(error: ValidationError) -> str:
