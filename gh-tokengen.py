@@ -1603,7 +1603,7 @@ class PathCompletionValidator:
 
         if not matched:
 
-            raise_validation_error_with_state(f"directory '{part}' not found", this.state, self.validation_error_class)
+            raise_validation_error_with_state(f"directory '{part}' not found", self.state, self.validation_error_class)
 
         return matched
 
@@ -2020,20 +2020,6 @@ def prompt_for_input(
         def check_if_text_is_empty(text: str) -> bool:
             """Check if text is empty."""
             return not text
-
-        def select_validation_path_for_no_completion(text: str) -> str:
-            """Return validation path for no_path_completion mode."""
-            return text
-
-        def update_buffer_with_resolved_path(buf: Any, unexpanded_path: str) -> None:
-            """Update buffer text and cursor position with resolved path."""
-            buf.text = unexpanded_path
-            buf.cursor_position = len(unexpanded_path)
-
-        def get_expanded_path_from_result(result: Tuple[str, str]) -> Tuple[str, str]:
-            """Extract unexpanded and expanded paths from resolution result."""
-            unexpanded_path, expanded_path = result
-            return unexpanded_path, expanded_path
 
         def resolve_and_update_buffer_or_use_text(buf: Any, text: str) -> Tuple[str, str]:
             """Resolve fuzzy path and update buffer, or return original text."""
