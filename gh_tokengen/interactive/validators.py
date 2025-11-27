@@ -1,5 +1,10 @@
+from __future__ import annotations
 from pathlib import Path
-from typing import Any, Optional, Callable, List, Tuple, Type
+from typing import Any, Optional, Callable, List, Tuple, Type, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from prompt_toolkit.buffer import Buffer
+    from prompt_toolkit.document import Document
 try:
     from prompt_toolkit.validation import Validator
 except ImportError:
@@ -140,7 +145,7 @@ def check_if_text_is_empty(text: str) -> bool:
     """Check if text is empty (validation should be skipped)."""
     return not text
 
-def update_buffer_with_resolved_path(buf: Any, unexpanded_path: str) -> None:
+def update_buffer_with_resolved_path(buf: Buffer, unexpanded_path: str) -> None:
     """Update buffer text and cursor position with resolved path."""
     buf.text = unexpanded_path
     buf.cursor_position = len(unexpanded_path)
@@ -152,7 +157,7 @@ def get_expanded_path_from_result(result: Tuple[str, str]) -> Tuple[str, str]:
     return unexpanded_path, expanded_path
 
 
-def resolve_and_update_buffer_or_use_text(buf: Any, text: str, path_resolver: FuzzyPathResolver) -> Tuple[str, str]:
+def resolve_and_update_buffer_or_use_text(buf: Buffer, text: str, path_resolver: FuzzyPathResolver) -> Tuple[str, str]:
     """Resolve fuzzy path and update buffer, or return original text."""
     result = path_resolver.resolve(text)
     if result:
@@ -168,7 +173,7 @@ def select_validation_path_for_no_completion(text: str) -> str:
     return text
 
 
-def determine_validation_path_for_completion_mode(buf: Any, text: str, no_path_completion: bool, path_resolver: FuzzyPathResolver) -> str:
+def determine_validation_path_for_completion_mode(buf: Buffer, text: str, no_path_completion: bool, path_resolver: FuzzyPathResolver) -> str:
     """Determine validation path based on completion mode."""
     if no_path_completion:
         return select_validation_path_for_no_completion(text)
@@ -247,7 +252,7 @@ def validate_resolved_path_or_set_error(validation_path: str, state: ValidationS
         set_error_and_abort("not a valid *.pem file name", state)
         return False
 
-def handle_path_mode_validation(buf: Any, text: str, state: ValidationState, cwd: Path, no_path_completion: bool, path_resolver: FuzzyPathResolver) -> bool:
+def handle_path_mode_validation(buf: Buffer, text: str, state: ValidationState, cwd: Path, no_path_completion: bool, path_resolver: FuzzyPathResolver) -> bool:
     """Handle validation for path modes, return False if validation fails."""
     if check_if_text_is_empty(text):
         return False
@@ -278,18 +283,18 @@ def check_if_path_mode_enabled(enable_path_completion: bool, no_path_completion:
     return enable_path_completion or no_path_completion
 
 
-def perform_validation_by_mode(buf: Any, text: str, state: ValidationState, cwd: Path, enable_path_completion: bool, no_path_completion: bool, path_resolver: FuzzyPathResolver, validator_func: Optional[Callable[[str], None]]) -> bool:
+def perform_validation_by_mode(buf: Buffer, text: str, state: ValidationState, cwd: Path, enable_path_completion: bool, no_path_completion: bool, path_resolver: FuzzyPathResolver, validator_func: Optional[Callable[[str], None]]) -> bool:
     """Perform validation based on current mode, return False if validation fails."""
     if check_if_path_mode_enabled(enable_path_completion, no_path_completion):
         return handle_path_mode_validation(buf, text, state, cwd, no_path_completion, path_resolver)
     else:
         return handle_non_path_mode_validation(text, validator_func, state)
 
-def accept_buffer_input(buf: Any) -> None:
+def accept_buffer_input(buf: Buffer) -> None:
     """Accept the buffer input."""
     buf.validate_and_handle()
 
-def validate_and_accept_if_valid(buf: Any, text: str, state: ValidationState, cwd: Path, enable_path_completion: bool, no_path_completion: bool, path_resolver: FuzzyPathResolver, validator_func: Optional[Callable[[str], None]]) -> None:
+def validate_and_accept_if_valid(buf: Buffer, text: str, state: ValidationState, cwd: Path, enable_path_completion: bool, no_path_completion: bool, path_resolver: FuzzyPathResolver, validator_func: Optional[Callable[[str], None]]) -> None:
     """Validate input and accept if valid."""
     if perform_validation_by_mode(buf, text, state, cwd, enable_path_completion, no_path_completion, path_resolver, validator_func):
         accept_buffer_input(buf)
@@ -313,7 +318,7 @@ class EnterKeyValidator:
         self.validator_func = validator_func
         self.cwd = cwd
 
-    def validate_and_accept(self, buf: Any, text: str) -> None:
+    def validate_and_accept(self, buf: Buffer, text: str) -> None:
         """Validate input and accept if valid."""
         validate_and_accept_if_valid(
             buf,
@@ -434,7 +439,7 @@ class PromptInputValidator(Validator):
             return
         self._execute_validation_workflow(text)
 
-    def validate(self, document: Any) -> None:
+    def validate(self, document: Document) -> None:
         """Validate input according to current mode and configuration."""
         text = document.text.strip()
         self._clear_error_state()
